@@ -8,7 +8,7 @@ Out of scope: installs you run directly in your terminal outside a Claude Code s
 
 - **PreToolUse hook** on `Bash` — when Claude (or you) tries to run `npm install`, `pip install`, `cargo add`, `gem install`, `composer require`, etc., the hook intercepts the command, identifies the target package(s), and decides whether to allow, ask, or deny.
 - **UserPromptSubmit hook** — when you type `/plugin install <target>` or `/plugin marketplace add <git-url>`, the hook fetches the plugin source and runs the analyzer before the prompt reaches Claude.
-- **SessionStart hook** — on every new Claude Code session, scans installed plugins under `~/.claude/plugins` (configurable). A persistent ledger at `~/.cache/watchdog/vetted_plugins.json` records the SHA-256 content hash of each plugin's `.claude-plugin/`, `hooks/`, and `commands/` directories. Plugins with an unchanged hash are skipped; new or updated plugins are re-analyzed and a summary is injected as session context. Soft-capped via `WATCHDOG_SESSION_MAX_SCANS` (default 10) to bound first-session latency.
+- **SessionStart hook** — on every new Claude Code session, scans installed plugins under `~/.claude/plugins` (configurable). A persistent ledger at `~/.cache/watchdog/vetted_plugins.json` records the SHA-256 content hash of each plugin's `.claude-plugin/`, `hooks/`, `commands/`, and `skills/` directories. Plugins with an unchanged hash are skipped; new or updated plugins are re-analyzed and a summary is injected as session context. Soft-capped via `WATCHDOG_SESSION_MAX_SCANS` (default 10) to bound first-session latency.
 - **`/watchdog-scan <target>`** — manual audit slash command for ad-hoc checks before installing something yourself.
 
 ## Pipeline
@@ -113,18 +113,20 @@ Watchdog/
 │   └── mascot.py                        # ASCII police-dog UI
 │
 ├── adapters/
-│   └── claude_code/                     # production Claude Code plugin
-│       ├── hooks/
-│       │   ├── watchdog-check.sh
-│       │   ├── plugin-prompt-check.sh
-│       │   └── session-scan.sh
-│       ├── commands/
-│       │   └── watchdog-scan.md
-│       └── entry/
-│           ├── pretool_bash.py          # PreToolUse Bash hook
-│           ├── prompt.py                # UserPromptSubmit /plugin install
-│           ├── session.py               # SessionStart plugin ledger scan
-│           └── manual.py                # /watchdog-scan slash command
+│   ├── claude_code/                     # production Claude Code plugin
+│   │   ├── hooks/
+│   │   │   ├── watchdog-check.sh
+│   │   │   ├── plugin-prompt-check.sh
+│   │   │   └── session-scan.sh
+│   │   ├── commands/
+│   │   │   └── watchdog-scan.md
+│   │   └── entry/
+│   │       ├── pretool_bash.py          # PreToolUse Bash hook
+│   │       ├── prompt.py                # UserPromptSubmit /plugin install
+│   │       ├── session.py               # SessionStart plugin ledger scan
+│   │       └── manual.py                # /watchdog-scan slash command
+│   └── mcp_server/                      # MCP server adapter
+│       └── server.py                    # FastMCP tools + pure-Python impls
 │
 └── tests/
     ├── core/                            # engine tests
@@ -132,9 +134,13 @@ Watchdog/
     │   ├── test_fetch_artifact.py       # fetchers (fully mocked, no network)
     │   ├── test_claude_analyze.py       # analyzer cache, prompt, verdict extraction
     │   └── test_session_scan.py         # ledger, content-hash, discovery
-    └── adapters/                        # adapter integration tests (host-specific)
-        └── claude_code/
+    └── adapter_tests/                   # adapter integration tests
+        └── test_mcp_server.py           # MCP tool implementations
 ```
+
+> Note: the adapter test directory is named `adapter_tests/` (not
+> `adapters/`) to avoid shadowing the top-level `adapters/` package
+> during `unittest discover`.
 
 ### Adapters
 
@@ -179,12 +185,40 @@ The MCP adapter and the Claude Code adapter share the same `~/.cache/watchdog/`
 state, so plugins vetted via one are recognized by the other.
 
 ### Planned adapters
+
 - `adapters/path_shim/` — PATH-prepend wrapper for package-manager
-  binaries (`npm`, `pip`, `cargo`, ...). Agent- and host-agnostic; covers
-  installs from terminals and from agents that don't expose hooks.
-- `adapters/pre_commit/`, `adapters/github_action/` — CI integrations.
+  binaries (`npm`, `pip`, `cargo`, ...). Agent- and host-agnostic;
+  covers installs from terminals and from agents that don't expose
+  hooks.
+- `adapters/pre_commit/`, `adapters/github_action/` — CI integrations
+  for blocking unsafe installs at commit/PR time.
 
 All planned adapters reuse `watchdog_core` as-is, no engine changes.
+
+## Using the engine directly
+
+If you're building your own agent or tooling, you can use the engine as
+a regular Python library without going through any adapter:
+
+```python
+from watchdog_core import (
+    collect_packages,            # parse a shell install command
+    query_osv, resolve_version,  # OSV.dev lookups
+    analyze_package,             # LLM source review
+    analyze_local_plugin,        # local plugin directory audit
+    discover_plugins,            # scan ~/.claude/plugins
+    load_ledger, save_ledger,    # persistent vetted-plugins ledger
+    worst_verdict,               # verdict aggregation
+)
+
+pkgs, notes = collect_packages("npm install lodash@4.17.20")
+for pkg in pkgs:
+    print(query_osv(pkg))
+```
+
+Install with `pip install watchdog-scanner`. No dependencies beyond the
+Python standard library; the `[mcp]` extra adds the MCP SDK only if you
+need to run the MCP server.
 
 ## Security model
 
@@ -204,14 +238,6 @@ The analyzer returns one of:
 - `ask` — suspicious but inconclusive, or analyzer unavailable. The user gets the indicators and decides.
 
 OSV finds short-circuit before Claude runs in mode `both` if they are at or above the configured threshold. Otherwise Claude has the final say.
-
-## Testing
-
-```bash
-python3 -m unittest discover -s tests
-```
-
-The full test suite runs in milliseconds with **zero network calls** — every external dependency (OSV, npm registry, PyPI, crates.io, RubyGems, Packagist, git, `claude` CLI) is mocked.
 
 ## Examples
 
@@ -234,6 +260,27 @@ Manual audit of a candidate plugin before installing:
 ```text
 /watchdog-scan https://github.com/some/claude-plugin
 ```
+
+Use Watchdog from a non-Claude-Code agent via MCP (Cursor, Continue,
+custom):
+
+```text
+# In the agent: invoke the Watchdog MCP tool
+> tool: watchdog_preflight_install
+> arg:  command="npm install lodash@4.17.20"
+< {"verdict":"deny","reason":"GHSA-...","packages":[...]}
+```
+
+## Testing
+
+```bash
+python3 -m unittest discover -s tests
+```
+
+The full test suite (140 tests) runs in under a second with **zero
+network calls** — every external dependency (OSV, npm registry, PyPI,
+crates.io, RubyGems, Packagist, git, `claude` CLI, MCP SDK) is mocked
+or gracefully skipped when absent.
 
 ## Limitations
 
