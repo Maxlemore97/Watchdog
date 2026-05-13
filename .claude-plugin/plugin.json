@@ -1,0 +1,44 @@
+{
+  "name": "watchdog",
+  "version": "0.3.0",
+  "description": "Pre-install security analyzer: OSV CVE lookup + Claude-driven source review for packages and Claude plugins",
+  "author": {
+    "name": "Maxlemore97",
+    "email": "30655722+Maxlemore97@users.noreply.github.com",
+    "url": "https://github.com/Maxlemore97"
+  },
+  "commands": "./adapters/claude_code/commands",
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "${CLAUDE_PLUGIN_ROOT}/adapters/claude_code/hooks/watchdog-check.sh"
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "${CLAUDE_PLUGIN_ROOT}/adapters/claude_code/hooks/plugin-prompt-check.sh"
+          }
+        ]
+      }
+    ],
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "${CLAUDE_PLUGIN_ROOT}/adapters/claude_code/hooks/session-scan.sh"
+          }
+        ]
+      }
+    ]
+  }
+}
