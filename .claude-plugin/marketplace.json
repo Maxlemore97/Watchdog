@@ -1,0 +1,17 @@
+{
+  "name": "watchdog-marketplace",
+  "owner": {
+    "name": "Maxlemore97",
+    "email": "30655722+Maxlemore97@users.noreply.github.com",
+    "url": "https://github.com/Maxlemore97"
+  },
+  "plugins": [
+    {
+      "name": "watchdog",
+      "source": "./",
+      "description": "Pre-install supply-chain scanner: OSV CVE lookup + LLM source review for packages and Claude plugins",
+      "version": "0.3.0",
+      "category": "security"
+    }
+  ]
+}

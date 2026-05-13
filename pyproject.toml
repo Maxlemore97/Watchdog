@@ -1,0 +1,49 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "watchdog-scanner"
+version = "0.3.0"
+description = "Pre-install supply-chain scanner: OSV CVE lookup + LLM source review for packages and Claude plugins. Engine + per-host adapters."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [
+    { name = "Maxlemore97", email = "30655722+Maxlemore97@users.noreply.github.com" }
+]
+keywords = ["security", "supply-chain", "claude", "claude-code", "osv", "mcp", "pre-install"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Security",
+]
+dependencies = []
+
+[project.optional-dependencies]
+mcp = ["mcp>=1.0"]
+dev = ["pytest>=7"]
+
+[project.urls]
+Repository = "https://github.com/Maxlemore97/Watchdog"
+
+[project.scripts]
+watchdog-scan = "adapters.claude_code.entry.manual:main"
+watchdog-mcp  = "adapters.mcp_server.server:main"
+
+[tool.setuptools]
+packages = [
+    "watchdog_core",
+    "adapters",
+    "adapters.claude_code",
+    "adapters.claude_code.entry",
+    "adapters.mcp_server",
+]
+
+[tool.setuptools.package-data]
+watchdog_core = ["*.py"]
