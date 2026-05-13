@@ -50,7 +50,7 @@ emit hook decision  →  allow | ask | deny  (+ reason for the user)
 This is a Claude Code plugin. From a marketplace add it with:
 
 ```text
-/plugin marketplace add /Users/maximilian/WebstormProjects/Watchdog
+/plugin marketplace add https://github.com/Maxlemore97/Watchdog
 /plugin install watchdog
 ```
 
