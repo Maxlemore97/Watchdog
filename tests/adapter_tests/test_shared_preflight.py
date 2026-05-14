@@ -109,6 +109,53 @@ class PreflightPackagesTests(unittest.TestCase):
             result = pf.preflight_packages([_pkg()], [], mode="both")
         self.assertEqual({f["source"] for f in result["findings"]}, {"claude"})
 
+    def test_result_includes_packages_key(self):
+        with patch.object(pf, "query_osv", return_value=[]), \
+             patch.object(pf, "analyze_package", return_value=None):
+            result = pf.preflight_packages(
+                [_pkg("a"), _pkg("b", version=None)], [], mode="both"
+            )
+        self.assertIn("packages", result)
+        self.assertEqual(len(result["packages"]), 2)
+        self.assertEqual(result["packages"][0]["name"], "a")
+        self.assertIsNone(result["packages"][1]["version"])
+
+
+class BudgetTests(unittest.TestCase):
+    def test_zero_budget_returns_ask(self):
+        with patch.object(pf, "query_osv", return_value=[]), \
+             patch.object(pf, "analyze_package", return_value=None):
+            result = pf.preflight_packages(
+                [_pkg("a"), _pkg("b")], [], mode="claude", budget_secs=0.0
+            )
+        self.assertEqual(result["verdict"], "ask")
+        self.assertIn("budget", result["reason"])
+
+    def test_budget_exceeded_midway_returns_ask(self):
+        import time as _time
+
+        def slow(*a, **kw):
+            _time.sleep(0.05)
+            return {"verdict": "allow", "reason": "ok"}
+
+        with patch.object(pf, "query_osv", return_value=[]), \
+             patch.object(pf, "analyze_package", side_effect=slow):
+            result = pf.preflight_packages(
+                [_pkg("a"), _pkg("b"), _pkg("c"), _pkg("d")],
+                [], mode="claude", budget_secs=0.06,
+            )
+        self.assertEqual(result["verdict"], "ask")
+        self.assertIn("budget", result["reason"])
+
+    def test_budget_none_does_not_short_circuit(self):
+        with patch.object(pf, "query_osv", return_value=[]), \
+             patch.object(pf, "analyze_package",
+                          return_value={"verdict": "allow", "reason": "ok"}):
+            result = pf.preflight_packages(
+                [_pkg("a")], [], mode="claude", budget_secs=None
+            )
+        self.assertEqual(result["verdict"], "allow")
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -26,6 +26,7 @@ from __future__ import annotations
 import sys
 from typing import Any
 
+from adapters._shared.preflight import preflight_packages
 from watchdog_core import (
     analyze_local_plugin,
     analyze_package,
@@ -34,21 +35,9 @@ from watchdog_core import (
     filter_by_severity,
     load_ledger,
     query_osv,
-    summarize,
-    worst_verdict,
 )
 from watchdog_core.osv import MIN_SEVERITY
 from watchdog_core.types import Package
-
-VALID_MODES = {"osv", "claude", "both"}
-
-
-def _pkg_label(p: Package) -> str:
-    return f"{p.ecosystem}:{p.name}{('@' + p.version) if p.version else ''}"
-
-
-def _package_dict(p: Package) -> dict[str, Any]:
-    return {"ecosystem": p.ecosystem, "name": p.name, "version": p.version}
 
 
 # ---------- pure-Python tool implementations ------------------------------
@@ -71,95 +60,8 @@ def preflight_install(command: str, mode: str = "both") -> dict[str, Any]:
           "findings": [<per-package detail>, ...]
         }
     """
-    if mode not in VALID_MODES:
-        mode = "both"
-
     pkgs, notes = collect_packages(command)
-    if not pkgs and not notes:
-        return {
-            "verdict": "allow",
-            "reason": "no install command detected",
-            "mode": mode,
-            "packages": [],
-            "notes": [],
-            "findings": [],
-        }
-    if not pkgs and notes:
-        return {
-            "verdict": "ask",
-            "reason": "unsupported install form: " + "; ".join(notes),
-            "mode": mode,
-            "packages": [],
-            "notes": notes,
-            "findings": [],
-        }
-
-    findings: list[dict[str, Any]] = []
-    decisions: list[tuple[str, str]] = []
-
-    if mode in {"osv", "both"}:
-        for pkg in pkgs:
-            try:
-                vulns = query_osv(pkg)
-            except Exception as exc:
-                decisions.append(("ask", f"OSV unreachable for {_pkg_label(pkg)}: {exc}"))
-                continue
-            if not vulns:
-                continue
-            filtered = filter_by_severity(vulns)
-            if filtered:
-                decisions.append((
-                    "deny",
-                    f"{_pkg_label(pkg)} -> {summarize(filtered)}",
-                ))
-                findings.append({
-                    "package": _pkg_label(pkg),
-                    "source": "osv",
-                    "vulns": [v.get("id", "?") for v in filtered],
-                    "severity_threshold": MIN_SEVERITY,
-                })
-
-    osv_already_denied = any(d[0] == "deny" for d in decisions)
-    if mode in {"claude", "both"} and not osv_already_denied:
-        for pkg in pkgs:
-            try:
-                verdict = analyze_package(pkg.ecosystem, pkg.name, pkg.version)
-            except Exception as exc:
-                decisions.append(("ask", f"analyzer error for {_pkg_label(pkg)}: {exc}"))
-                continue
-            if verdict is None:
-                continue
-            d = verdict.get("verdict", "ask")
-            decisions.append((
-                d,
-                f"[claude] {_pkg_label(pkg)}: {verdict.get('reason','')}",
-            ))
-            findings.append({
-                "package": _pkg_label(pkg),
-                "source": "claude",
-                **verdict,
-            })
-
-    if not decisions:
-        return {
-            "verdict": "allow",
-            "reason": "clean",
-            "mode": mode,
-            "packages": [_package_dict(p) for p in pkgs],
-            "notes": notes,
-            "findings": findings,
-        }
-
-    worst = worst_verdict(d[0] for d in decisions)
-    relevant = [reason for d, reason in decisions if d == worst]
-    return {
-        "verdict": worst,
-        "reason": "; ".join(relevant[:5]),
-        "mode": mode,
-        "packages": [_package_dict(p) for p in pkgs],
-        "notes": notes,
-        "findings": findings,
-    }
+    return preflight_packages(pkgs, notes, mode=mode, offline_decision="ask")
 
 
 def scan_package(ecosystem: str, name: str, version: str | None = None) -> dict[str, Any]:

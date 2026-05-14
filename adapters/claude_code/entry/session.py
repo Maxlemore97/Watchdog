@@ -17,6 +17,7 @@ if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
 from watchdog_core import discover_plugins, load_ledger, mascot, save_ledger, scan_plugins
+from watchdog_core.policy import rank
 
 
 def _emit_session_context(text: str) -> None:
@@ -65,7 +66,7 @@ def main() -> int:
     summary = _format_summary(findings, skipped)
     worst = max(
         (v.get("verdict", "ask") for _, v in findings),
-        key=lambda d: {"allow": 0, "ask": 1, "deny": 2}.get(d, 1),
+        key=rank,
     )
     event = {
         "deny": mascot.EVENT_PLUGIN_UNSAFE,
@@ -73,7 +74,7 @@ def main() -> int:
     }.get(worst, mascot.EVENT_PLUGIN_INFO)
     mascot.show(
         event,
-        ["Session-Scan abgeschlossen.", *[f"{n}: {v.get('verdict','ask')}" for n, v in findings]],
+        ["Session scan complete.", *[f"{n}: {v.get('verdict','ask')}" for n, v in findings]],
     )
     _emit_session_context(summary)
     return 0

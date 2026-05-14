@@ -30,7 +30,13 @@ runs:
         python-version: ${{ inputs.python-version }}
     - name: Install Watchdog
       shell: bash
-      run: pip install --quiet watchdog-scanner
+      env:
+        WATCHDOG_PIN: ${{ github.action_ref }}
+      run: |
+        version="${WATCHDOG_PIN:-0.3.0}"
+        # Strip leading 'v' if action_ref looks like a tag (v0.3.0 -> 0.3.0).
+        version="${version#v}"
+        pip install --quiet "watchdog-scanner==${version}"
     - name: Fetch base ref
       shell: bash
       run: |

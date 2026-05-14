@@ -14,6 +14,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 import shutil
 import subprocess
 import time
@@ -82,6 +83,41 @@ Rules:
 - verdict "allow" when no red flags.
 - Keep reason under 200 chars.
 """
+
+
+HOSTILE_PATTERNS: list[tuple[re.Pattern[str], str]] = [
+    (re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----"), "embedded private key"),
+    (re.compile(r"\bAKIA[0-9A-Z]{16}\b"), "AWS access key id shape"),
+    (re.compile(r"\bghp_[A-Za-z0-9]{36}\b"), "GitHub personal access token shape"),
+    (re.compile(r"\bsk-[A-Za-z0-9]{20,}\b"), "OpenAI/Anthropic key shape"),
+    (re.compile(r"\bxox[bpoa]-[A-Za-z0-9-]{10,}"), "Slack token shape"),
+    (re.compile(r"(printenv|env)\s*\|\s*(curl|wget|nc)\b"), "env piped to network sink"),
+    (re.compile(r"curl\s+[^|;&]*\|\s*(bash|sh|zsh)\b"), "curl piped to shell"),
+]
+
+
+def _prefilter(bundle: ArtifactBundle) -> dict | None:
+    """Deterministic scan for highest-signal indicators. Returns a deny
+    verdict on first match; None otherwise. Runs before the LLM so a
+    jailbroken model cannot whitewash obviously hostile content."""
+    hits: list[str] = []
+    matched_label: str | None = None
+    for path, content in bundle.files.items():
+        if not isinstance(content, str):
+            continue
+        for pattern, label in HOSTILE_PATTERNS:
+            if pattern.search(content):
+                hits.append(f"{label} in {path}")
+                if matched_label is None:
+                    matched_label = label
+    if not hits:
+        return None
+    return {
+        "verdict": "deny",
+        "risk": "critical",
+        "reason": f"prefilter: {matched_label}",
+        "indicators": hits[:10],
+    }
 
 
 def _cache_key(ecosystem: str, name: str, version: str | None) -> str:
@@ -236,6 +272,12 @@ def analyze_local_plugin(name: str, path: str, content_hash: str | None = None) 
         if cached is not None:
             return cached
 
+    prefiltered = _prefilter(bundle)
+    if prefiltered is not None:
+        if content_hash:
+            _cache_store(_cache_key("plugin-local", name, content_hash), prefiltered)
+        return prefiltered
+
     prompt = _build_user_prompt(bundle)
     output = _invoke_claude(prompt)
     verdict = _extract_verdict(output) if output else None
@@ -256,6 +298,11 @@ def analyze_package(ecosystem: str, name: str, version: str | None) -> dict | No
     bundle = fetch(ecosystem, name, version)
     if bundle is None:
         return {"verdict": "ask", "reason": f"could not fetch {ecosystem}:{name}"}
+
+    prefiltered = _prefilter(bundle)
+    if prefiltered is not None:
+        _cache_store(key, prefiltered)
+        return prefiltered
 
     prompt = _build_user_prompt(bundle)
     output = _invoke_claude(prompt)

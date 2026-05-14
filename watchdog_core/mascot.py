@@ -19,10 +19,10 @@ EVENT_PLUGIN_SAFE = "plugin_safe"
 EVENT_PLUGIN_UNSAFE = "plugin_unsafe"
 
 _HEADLINES = {
-    EVENT_INTERCEPT: "SICHERHEITSCHECK - INTERCEPT",
-    EVENT_PLUGIN_INFO: "SICHERHEITSCHECK - PLUGIN INFO",
-    EVENT_PLUGIN_SAFE: "SICHERHEITSCHECK - PLUGIN SAFE",
-    EVENT_PLUGIN_UNSAFE: "SICHERHEITSCHECK - PLUGIN UNSAFE",
+    EVENT_INTERCEPT: "SECURITY CHECK - INTERCEPT",
+    EVENT_PLUGIN_INFO: "SECURITY CHECK - PLUGIN INFO",
+    EVENT_PLUGIN_SAFE: "SECURITY CHECK - PLUGIN SAFE",
+    EVENT_PLUGIN_UNSAFE: "SECURITY CHECK - PLUGIN UNSAFE",
 }
 
 BANNER_TEXT = "STOP! SNIFFING FOR PROBLEMS - WATCHDOG ON DUTY"
@@ -185,7 +185,7 @@ def show(event: str, lines: Sequence[str] | str = (), *, stream: IO[str] | None 
     """Print the mascot for the given event. No-op if disabled."""
     if not _enabled():
         return
-    headline = _HEADLINES.get(event, "SICHERHEITSCHECK")
+    headline = _HEADLINES.get(event, "SECURITY CHECK")
     if isinstance(lines, str):
         body = [lines]
     else:
@@ -201,9 +201,9 @@ def show(event: str, lines: Sequence[str] | str = (), *, stream: IO[str] | None 
 if __name__ == "__main__":
     ev = sys.argv[1] if len(sys.argv) > 1 else EVENT_INTERCEPT
     demo = {
-        EVENT_INTERCEPT: ["Bash install command erkannt", "Pruefung laeuft..."],
+        EVENT_INTERCEPT: ["Bash install command detected", "Scan in progress..."],
         EVENT_PLUGIN_INFO: ["ecosystem: npm", "name: lodash", "version: 4.17.21"],
-        EVENT_PLUGIN_SAFE: ["npm:lodash@4.17.21", "Freigegeben - keine Funde."],
+        EVENT_PLUGIN_SAFE: ["npm:lodash@4.17.21", "Approved - no findings."],
         EVENT_PLUGIN_UNSAFE: ["npm:evilpkg@1.0.0", "GHSA-xxxx[critical]"],
     }.get(ev, ["demo"])
     show(ev, demo, stream=sys.stdout)

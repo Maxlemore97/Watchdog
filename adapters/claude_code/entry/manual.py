@@ -20,6 +20,7 @@ if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
 from watchdog_core import analyze_package, mascot
+from watchdog_core.policy import rank
 
 GIT_URL = re.compile(r"^(https?://|git@|ssh://).+")
 
@@ -30,7 +31,7 @@ def main() -> int:
         return 0
     target = sys.argv[1].strip()
 
-    mascot.show(mascot.EVENT_INTERCEPT, ["Manueller Scan gestartet.", f"target: {target}"])
+    mascot.show(mascot.EVENT_INTERCEPT, ["Manual scan started.", f"target: {target}"])
 
     if GIT_URL.match(target) or target.endswith(".git"):
         ecosystems = [("plugin", target, None)]
@@ -57,8 +58,7 @@ def main() -> int:
         if verdict:
             results.append({"ecosystem": eco, "name": name, "version": version, **verdict})
 
-    worst_rank = {"allow": 0, "ask": 1, "deny": 2}
-    worst = max(results, key=lambda r: worst_rank.get(r.get("verdict", "ask"), 1), default=None)
+    worst = max(results, key=lambda r: rank(r.get("verdict", "ask")), default=None)
     if worst is not None:
         decision = worst.get("verdict", "ask")
         event = {

@@ -15,10 +15,15 @@ from unittest.mock import patch
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from adapters.mcp_server import server as mcp_server  # noqa: E402
-from watchdog_core.types import Package  # noqa: E402
+from adapters._shared import preflight as shared_preflight  # noqa: E402
 
 
-class PreflightInstallTests(unittest.TestCase):
+class PreflightInstallDelegationTests(unittest.TestCase):
+    """After A1, preflight_install is a thin wrapper. We assert it
+    delegates to the shared aggregator with the parsed packages and
+    the requested mode. The aggregation matrix is tested in
+    test_shared_preflight.py."""
+
     def test_no_install_returns_allow(self):
         result = mcp_server.preflight_install("ls -la /tmp")
         self.assertEqual(result["verdict"], "allow")
@@ -28,81 +33,32 @@ class PreflightInstallTests(unittest.TestCase):
     def test_unsupported_form_returns_ask(self):
         result = mcp_server.preflight_install("pip install -r requirements.txt")
         self.assertEqual(result["verdict"], "ask")
-        self.assertEqual(result["packages"], [])
         self.assertTrue(any("requirements file" in n for n in result["notes"]))
 
-    def test_clean_install_returns_allow(self):
-        with patch.object(mcp_server, "query_osv", return_value=[]), \
-             patch.object(mcp_server, "analyze_package", return_value=None):
-            result = mcp_server.preflight_install("npm install lodash@4.17.21", mode="both")
-        self.assertEqual(result["verdict"], "allow")
-        self.assertEqual(result["packages"][0]["ecosystem"], "npm")
-        self.assertEqual(result["packages"][0]["name"], "lodash")
+    def test_delegates_to_preflight_packages(self):
+        captured: dict = {}
 
-    def test_osv_hit_returns_deny(self):
-        fake_vuln = {
-            "id": "GHSA-fake-1",
-            "database_specific": {"severity": "high"},
-        }
-        with patch.object(mcp_server, "query_osv", return_value=[fake_vuln]), \
-             patch.object(mcp_server, "analyze_package") as ap:
-            result = mcp_server.preflight_install(
-                "npm install lodash@4.17.20", mode="both"
-            )
-        self.assertEqual(result["verdict"], "deny")
-        self.assertIn("GHSA-fake-1", result["reason"])
-        ap.assert_not_called()  # OSV deny short-circuits Claude
+        def fake(pkgs, notes, mode="both", offline_decision="ask", budget_secs=None):
+            captured["pkgs"] = list(pkgs)
+            captured["notes"] = list(notes)
+            captured["mode"] = mode
+            captured["offline_decision"] = offline_decision
+            return {"verdict": "allow", "reason": "ok", "mode": mode,
+                    "packages": [], "notes": [], "findings": []}
 
-    def test_claude_only_mode_skips_osv(self):
-        with patch.object(mcp_server, "query_osv") as q, \
-             patch.object(
-                 mcp_server, "analyze_package",
-                 return_value={"verdict": "allow", "reason": "fine"},
-             ):
-            result = mcp_server.preflight_install(
-                "npm install x", mode="claude"
-            )
-        q.assert_not_called()
-        self.assertEqual(result["verdict"], "allow")
-
-    def test_osv_only_mode_skips_claude(self):
-        with patch.object(mcp_server, "query_osv", return_value=[]), \
-             patch.object(mcp_server, "analyze_package") as ap:
-            result = mcp_server.preflight_install(
-                "npm install x", mode="osv"
-            )
-        ap.assert_not_called()
-        self.assertEqual(result["verdict"], "allow")
-
-    def test_invalid_mode_falls_back_to_both(self):
-        with patch.object(mcp_server, "query_osv", return_value=[]), \
-             patch.object(mcp_server, "analyze_package", return_value=None):
-            result = mcp_server.preflight_install("npm install x", mode="banana")
-        self.assertEqual(result["mode"], "both")
+        with patch.object(mcp_server, "preflight_packages", side_effect=fake):
+            mcp_server.preflight_install("npm install lodash@4.17.21", mode="claude")
+        self.assertEqual(captured["mode"], "claude")
+        self.assertEqual(captured["offline_decision"], "ask")
+        self.assertEqual(len(captured["pkgs"]), 1)
+        self.assertEqual(captured["pkgs"][0].name, "lodash")
 
     def test_subshell_extraction_passes_through(self):
-        with patch.object(mcp_server, "query_osv", return_value=[]), \
-             patch.object(mcp_server, "analyze_package", return_value=None):
+        with patch.object(shared_preflight, "query_osv", return_value=[]), \
+             patch.object(shared_preflight, "analyze_package", return_value=None):
             result = mcp_server.preflight_install("bash -c 'npm install evil@1.0'")
         self.assertEqual(len(result["packages"]), 1)
         self.assertEqual(result["packages"][0]["name"], "evil")
-
-    def test_claude_ask_aggregates_to_ask(self):
-        with patch.object(mcp_server, "query_osv", return_value=[]), \
-             patch.object(
-                 mcp_server, "analyze_package",
-                 return_value={"verdict": "ask", "reason": "unsure"},
-             ):
-            result = mcp_server.preflight_install("npm install x", mode="both")
-        self.assertEqual(result["verdict"], "ask")
-        self.assertIn("unsure", result["reason"])
-
-    def test_findings_include_osv_hits(self):
-        fake_vuln = {"id": "X-1", "database_specific": {"severity": "critical"}}
-        with patch.object(mcp_server, "query_osv", return_value=[fake_vuln]), \
-             patch.object(mcp_server, "analyze_package"):
-            result = mcp_server.preflight_install("npm install pkg@1.0")
-        self.assertTrue(any(f["source"] == "osv" for f in result["findings"]))
 
 
 class ScanPackageTests(unittest.TestCase):
@@ -199,21 +155,6 @@ class BuildAppTests(unittest.TestCase):
             self.skipTest("mcp SDK not installed")
         app = mcp_server._build_app()
         self.assertEqual(app.name, "watchdog")
-
-
-class HelperTests(unittest.TestCase):
-    def test_pkg_label_with_version(self):
-        p = Package("npm", "lodash", "4.17.21")
-        self.assertEqual(mcp_server._pkg_label(p), "npm:lodash@4.17.21")
-
-    def test_pkg_label_without_version(self):
-        p = Package("npm", "lodash", None)
-        self.assertEqual(mcp_server._pkg_label(p), "npm:lodash")
-
-    def test_package_dict_round_trip(self):
-        p = Package("PyPI", "requests", "2.0")
-        d = mcp_server._package_dict(p)
-        self.assertEqual(d, {"ecosystem": "PyPI", "name": "requests", "version": "2.0"})
 
 
 if __name__ == "__main__":

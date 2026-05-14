@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import io
 import json
+import os
 import re
 import shutil
 import subprocess
@@ -441,6 +442,17 @@ def fetch_packagist(name: str, version: str | None) -> ArtifactBundle | None:
 
 # ---------- plugin (git clone) --------------------------------------------
 
+def _git_env() -> dict[str, str]:
+    """Subprocess env that disables interactive auth prompts. Hostile URLs
+    must not be able to hang waiting for credentials or host-key approval."""
+    return {
+        **os.environ,
+        "GIT_TERMINAL_PROMPT": "0",
+        "GIT_ASKPASS": "/bin/true",
+        "GIT_SSH_COMMAND": "ssh -o BatchMode=yes -o StrictHostKeyChecking=accept-new",
+    }
+
+
 def fetch_plugin_git(git_url: str, ref: str | None = None) -> ArtifactBundle | None:
     if not re.match(r"^(https://|git@|ssh://)", git_url):
         return None
@@ -448,12 +460,18 @@ def fetch_plugin_git(git_url: str, ref: str | None = None) -> ArtifactBundle | N
     notes: list[str] = []
     files: dict[str, str] = {}
     try:
-        cmd = ["git", "clone", "--depth=1"]
+        cmd = ["git", "clone", "--depth=1", "--filter=blob:none"]
         if ref:
             cmd += ["--branch", ref]
         cmd += [git_url, str(tmp)]
         try:
-            subprocess.run(cmd, check=True, capture_output=True, timeout=20)
+            subprocess.run(
+                cmd,
+                check=True,
+                capture_output=True,
+                timeout=20,
+                env=_git_env(),
+            )
         except (subprocess.CalledProcessError, subprocess.TimeoutExpired, FileNotFoundError) as exc:
             notes.append(f"git clone failed: {exc}")
             return ArtifactBundle("plugin", git_url, ref, {}, {}, notes)
@@ -463,7 +481,7 @@ def fetch_plugin_git(git_url: str, ref: str | None = None) -> ArtifactBundle | N
             if not d.is_dir():
                 continue
             for path in d.rglob("*"):
-                if not path.is_file():
+                if path.is_symlink() or not path.is_file():
                     continue
                 rel = path.relative_to(tmp)
                 content = _read_member(tmp, rel)
@@ -506,7 +524,7 @@ def fetch_plugin_local(name: str, path: str) -> ArtifactBundle | None:
         if not d.is_dir():
             continue
         for fp in d.rglob("*"):
-            if not fp.is_file():
+            if fp.is_symlink() or not fp.is_file():
                 continue
             rel = fp.relative_to(root)
             content = _read_member(root, rel)
@@ -515,10 +533,12 @@ def fetch_plugin_local(name: str, path: str) -> ArtifactBundle | None:
             files[str(rel)] = content
 
     for candidate in ("plugin.json", ".claude-plugin/plugin.json"):
-        if (root / candidate).is_file():
-            content = _read_member(root, Path(candidate))
-            if content is not None:
-                files[candidate] = content
+        path = root / candidate
+        if path.is_symlink() or not path.is_file():
+            continue
+        content = _read_member(root, Path(candidate))
+        if content is not None:
+            files[candidate] = content
 
     metadata: dict = {"local": True, "path": str(root)}
     for key in (".claude-plugin/plugin.json", "plugin.json"):

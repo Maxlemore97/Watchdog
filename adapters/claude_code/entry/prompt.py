@@ -19,6 +19,7 @@ from watchdog_core import (
     extract_plugin_targets,
     mascot,
 )
+from watchdog_core.policy import rank
 
 
 def _emit(decision: str | None, additional_context: str | None) -> None:
@@ -53,7 +54,7 @@ def main() -> int:
     if not targets:
         return 0
 
-    mascot.show(mascot.EVENT_INTERCEPT, ["/plugin install abgefangen.", *targets])
+    mascot.show(mascot.EVENT_INTERCEPT, ["/plugin install intercepted.", *targets])
 
     verdicts: list[tuple[str, dict]] = []
     for tgt in targets:
@@ -67,14 +68,11 @@ def main() -> int:
             verdicts.append((tgt, result))
 
     if not verdicts:
-        mascot.show(mascot.EVENT_PLUGIN_INFO, ["Analyzer nicht verfuegbar."])
+        mascot.show(mascot.EVENT_PLUGIN_INFO, ["Analyzer unavailable."])
         _emit(None, "watchdog: plugin install detected but analyzer unavailable.")
         return 0
 
-    worst = max(
-        verdicts,
-        key=lambda kv: {"allow": 0, "ask": 1, "deny": 2}.get(kv[1].get("verdict", "ask"), 1),
-    )
+    worst = max(verdicts, key=lambda kv: rank(kv[1].get("verdict", "ask")))
     target, verdict = worst
     decision = verdict.get("verdict", "ask")
     reason = verdict.get("reason", "no reason")

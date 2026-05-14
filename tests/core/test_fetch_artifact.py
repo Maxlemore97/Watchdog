@@ -1,7 +1,10 @@
 import io
 import json
+import os
+import subprocess
 import sys
 import tarfile
+import tempfile
 import unittest
 import zipfile
 from pathlib import Path
@@ -234,6 +237,70 @@ class DispatcherTests(unittest.TestCase):
     def test_plugin_git_rejects_non_url(self):
         bundle = fa.fetch_plugin_git("not-a-url")
         self.assertIsNone(bundle)
+
+
+class FetchPluginGitHardeningTests(unittest.TestCase):
+    """S2: git clone must run with credential prompts disabled and use
+    blob:none filtering to limit what attacker-controlled URLs can pull."""
+
+    def test_subprocess_env_disables_auth_prompts(self):
+        captured: dict = {}
+
+        def fake_run(cmd, **kw):
+            captured["cmd"] = cmd
+            captured["env"] = kw.get("env", {})
+            raise subprocess.CalledProcessError(128, cmd)
+
+        with patch.object(fa.subprocess, "run", side_effect=fake_run):
+            fa.fetch_plugin_git("https://example.invalid/x.git")
+
+        env = captured["env"]
+        self.assertEqual(env.get("GIT_TERMINAL_PROMPT"), "0")
+        self.assertEqual(env.get("GIT_ASKPASS"), "/bin/true")
+        self.assertIn("BatchMode=yes", env.get("GIT_SSH_COMMAND", ""))
+        self.assertIn("--filter=blob:none", captured["cmd"])
+
+
+class FetchPluginLocalSymlinkTests(unittest.TestCase):
+    """S3: hostile plugin can ship symlinks pointing outside the plugin
+    tree. fetch_plugin_local must skip symlinks the way content_hash
+    already does."""
+
+    def test_symlink_in_hooks_dir_is_skipped(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_p = Path(tmp)
+            # Target file outside the plugin tree, with a token-shaped string.
+            secret = tmp_p / "secret.txt"
+            secret.write_text("AKIAIOSFODNN7EXAMPLE")
+
+            plugin = tmp_p / "plug"
+            (plugin / ".claude-plugin").mkdir(parents=True)
+            (plugin / ".claude-plugin" / "plugin.json").write_text(
+                json.dumps({"name": "plug", "version": "0.1"})
+            )
+            (plugin / "hooks").mkdir()
+            evil_link = plugin / "hooks" / "leak.sh"
+            os.symlink(str(secret), str(evil_link))
+
+            bundle = fa.fetch_plugin_local("plug", str(plugin))
+            self.assertIsNotNone(bundle)
+            self.assertNotIn("hooks/leak.sh", bundle.files)
+            for content in bundle.files.values():
+                self.assertNotIn("AKIAIOSFODNN7EXAMPLE", content)
+
+    def test_symlink_manifest_is_skipped(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_p = Path(tmp)
+            secret = tmp_p / "fake_manifest.json"
+            secret.write_text(json.dumps({"name": "victim", "evil": True}))
+
+            plugin = tmp_p / "plug"
+            plugin.mkdir()
+            os.symlink(str(secret), str(plugin / "plugin.json"))
+
+            bundle = fa.fetch_plugin_local("plug", str(plugin))
+            self.assertIsNotNone(bundle)
+            self.assertNotIn("plugin.json", bundle.files)
 
 
 if __name__ == "__main__":
