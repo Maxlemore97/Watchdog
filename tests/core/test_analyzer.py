@@ -216,9 +216,9 @@ class AnalyzePackageTests(unittest.TestCase):
         self.assertEqual(v["verdict"], "ask")
         self.assertIn("could not fetch", v["reason"])
 
-    def test_returns_ask_when_claude_unavailable(self):
+    def test_returns_ask_when_llm_unavailable(self):
         with patch.object(ca, "fetch", return_value=self._bundle()), \
-             patch.object(ca, "_invoke_claude", return_value=None):
+             patch.object(ca, "_invoke_llm", return_value=None):
             v = ca.analyze_package("npm", "lodash", "4.17.21")
         self.assertEqual(v["verdict"], "ask")
 
@@ -226,79 +226,38 @@ class AnalyzePackageTests(unittest.TestCase):
         bundle = self._bundle()
         good_output = '{"verdict":"allow","risk":"low","reason":"clean"}'
         with patch.object(ca, "fetch", return_value=bundle) as fetch_mock, \
-             patch.object(ca, "_invoke_claude", return_value=good_output) as claude_mock:
+             patch.object(ca, "_invoke_llm", return_value=good_output) as llm_mock:
             v1 = ca.analyze_package("npm", "lodash", "4.17.21")
             v2 = ca.analyze_package("npm", "lodash", "4.17.21")
         self.assertEqual(v1, v2)
         self.assertEqual(v1["verdict"], "allow")
         self.assertEqual(fetch_mock.call_count, 1)
-        self.assertEqual(claude_mock.call_count, 1)
+        self.assertEqual(llm_mock.call_count, 1)
 
     def test_returns_normalized_invalid_verdict(self):
         bundle = self._bundle()
         bad_output = '{"verdict":"nonsense","reason":"weird"}'
         with patch.object(ca, "fetch", return_value=bundle), \
-             patch.object(ca, "_invoke_claude", return_value=bad_output):
+             patch.object(ca, "_invoke_llm", return_value=bad_output):
             v = ca.analyze_package("npm", "lodash", "4.17.21")
         self.assertEqual(v["verdict"], "ask")
 
 
-class InvokeClaudeTests(unittest.TestCase):
-    def test_returns_none_when_cli_missing(self):
-        with patch.object(ca, "_find_cli", return_value=None):
-            self.assertIsNone(ca._invoke_claude("hi"))
+class InvokeLlmTests(unittest.TestCase):
+    """The analyzer-level _invoke_llm wraps the provider registry. Detailed
+    per-provider invocation shape is tested in test_providers.py; here we
+    verify the wrapper passes through correctly."""
 
-    def test_sets_recursion_guard_env(self):
-        captured: dict = {}
+    def test_returns_none_when_no_provider(self):
+        with patch("watchdog_core.analyzer.invoke_llm", return_value=(None, None, None)):
+            self.assertIsNone(ca._invoke_llm("hi"))
 
-        class Result:
-            returncode = 0
-            stdout = '{"verdict":"allow"}'
-            stderr = ""
-
-        def fake_run(cmd, **kw):
-            captured["env"] = kw.get("env", {})
-            captured["cmd"] = cmd
-            return Result()
-
-        with patch.object(ca, "_find_cli", return_value="/usr/bin/claude"), \
-             patch("watchdog_core.analyzer.subprocess.run", side_effect=fake_run):
-            out = ca._invoke_claude("test prompt")
-        self.assertEqual(out, '{"verdict":"allow"}')
-        self.assertEqual(captured["env"].get("WATCHDOG_DISABLE"), "1")
-        self.assertIn("-p", captured["cmd"])
-        self.assertIn("--output-format", captured["cmd"])
-
-    def test_prompt_passed_via_stdin_not_argv(self):
-        # Multi-KB prompts must not blow ARG_MAX, so the prompt is piped
-        # via stdin rather than appearing as an argv element.
-        captured: dict = {}
-
-        class Result:
-            returncode = 0
-            stdout = '{"verdict":"allow"}'
-            stderr = ""
-
-        def fake_run(cmd, **kw):
-            captured["cmd"] = cmd
-            captured["input"] = kw.get("input")
-            return Result()
-
-        with patch.object(ca, "_find_cli", return_value="/usr/bin/claude"), \
-             patch("watchdog_core.analyzer.subprocess.run", side_effect=fake_run):
-            ca._invoke_claude("UNIQUE_PROMPT_BODY_TOKEN")
-        self.assertNotIn("UNIQUE_PROMPT_BODY_TOKEN", captured["cmd"])
-        self.assertEqual(captured["input"], "UNIQUE_PROMPT_BODY_TOKEN")
-
-    def test_returns_none_on_nonzero_exit(self):
-        class Result:
-            returncode = 1
-            stdout = ""
-            stderr = "oops"
-
-        with patch.object(ca, "_find_cli", return_value="/usr/bin/claude"), \
-             patch("watchdog_core.analyzer.subprocess.run", return_value=Result()):
-            self.assertIsNone(ca._invoke_claude("test"))
+    def test_returns_provider_output(self):
+        with patch(
+            "watchdog_core.analyzer.invoke_llm",
+            return_value=('{"verdict":"allow"}', None, None),
+        ):
+            self.assertEqual(ca._invoke_llm("hi"), '{"verdict":"allow"}')
 
 
 class PrefilterTests(unittest.TestCase):
@@ -348,12 +307,12 @@ class PrefilterTests(unittest.TestCase):
             ca.CACHE_DIR = Path(tmp)
             try:
                 with patch.object(ca, "fetch", return_value=bundle), \
-                     patch.object(ca, "_invoke_claude") as claude:
+                     patch.object(ca, "_invoke_llm") as llm:
                     v = ca.analyze_package("npm", "evil", "1.0")
             finally:
                 ca.CACHE_DIR = _orig
         self.assertEqual(v["verdict"], "deny")
-        claude.assert_not_called()
+        llm.assert_not_called()
 
 
 class SystemPromptCoversSkillsTests(unittest.TestCase):

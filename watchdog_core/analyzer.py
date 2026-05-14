@@ -1,12 +1,12 @@
 """LLM-driven source analyzer.
 
 Builds a structured prompt that wraps untrusted content in clear tags,
-shells out to the local `claude` CLI in non-interactive mode, and parses
-a strict JSON verdict out of the response. Caches verdicts on disk under
-`WATCHDOG_CACHE_DIR`.
+shells out to whichever local LLM CLI the user has configured (see
+`watchdog_core.providers`), and parses a strict JSON verdict out of the
+response. Caches verdicts on disk under `WATCHDOG_CACHE_DIR`.
 
-Sets `WATCHDOG_DISABLE=1` in the child environment so any hook that the
-nested Claude session might trigger short-circuits and does not
+The provider sets `WATCHDOG_DISABLE=1` in the child environment so any
+hook the nested agent session might trigger short-circuits and does not
 recursively re-invoke this analyzer.
 """
 from __future__ import annotations
@@ -16,21 +16,17 @@ import html
 import json
 import os
 import re
-import shutil
-import subprocess
 import time
 from pathlib import Path
 
 from .fetchers import fetch, fetch_plugin_local
 from .log import log_event
 from .paths import cache_dir
+from .providers import invoke_llm, resolve_provider, build_config
 from .types import ArtifactBundle
 
 CACHE_DIR = cache_dir()
-CACHE_TTL_SECONDS = int(os.environ.get("WATCHDOG_CLAUDE_CACHE_TTL", "86400"))
-
-MODEL = os.environ.get("WATCHDOG_MODEL", "claude-haiku-4-5-20251001")
-CLI_TIMEOUT = float(os.environ.get("WATCHDOG_CLAUDE_TIMEOUT", "60"))
+CACHE_TTL_SECONDS = int(os.environ.get("WATCHDOG_LLM_CACHE_TTL", "86400"))
 
 SYSTEM_PROMPT = """You are a strict security analyzer for software packages and Claude Code plugins.
 You will receive metadata and a small set of files from a package or plugin the user is about to install or has just installed.
@@ -125,8 +121,19 @@ def _prefilter(bundle: ArtifactBundle) -> dict | None:
     }
 
 
+def _current_provider_signature() -> str:
+    """Build the (provider, model) component of the cache key. Switching
+    providers or models must invalidate prior verdicts so a weak local
+    model cannot whitewash a verdict cached from a stronger one."""
+    provider = resolve_provider()
+    if provider is None:
+        return "none:none"
+    cfg = build_config(provider, SYSTEM_PROMPT)
+    return f"{provider.name}:{cfg.model}"
+
+
 def _cache_key(ecosystem: str, name: str, version: str | None) -> str:
-    raw = f"claude:{MODEL}:{ecosystem}|{name}|{version or ''}".lower()
+    raw = f"llm:{_current_provider_signature()}:{ecosystem}|{name}|{version or ''}".lower()
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:32]
 
 
@@ -186,42 +193,12 @@ def _build_user_prompt(bundle: ArtifactBundle) -> str:
     return "\n".join(parts)
 
 
-def _find_cli() -> str | None:
-    return shutil.which(os.environ.get("WATCHDOG_CLAUDE_BIN", "claude"))
-
-
-def _invoke_claude(prompt: str) -> str | None:
-    cli = _find_cli()
-    if not cli:
-        return None
-    env = os.environ.copy()
-    env["WATCHDOG_DISABLE"] = "1"
-    cmd = [
-        cli,
-        "-p",
-        "--model",
-        MODEL,
-        "--output-format",
-        "json",
-        "--max-turns",
-        "1",
-        "--allowed-tools",
-        "",
-    ]
-    append_system = os.environ.get("WATCHDOG_APPEND_SYSTEM", "1") not in {"0", "false", "no"}
-    if append_system:
-        cmd += ["--append-system-prompt", SYSTEM_PROMPT]
-    try:
-        # Pipe the prompt via stdin instead of argv so multi-KB bundles
-        # cannot run into ARG_MAX if the bundle cap is ever raised.
-        proc = subprocess.run(
-            cmd, input=prompt, capture_output=True, text=True, timeout=CLI_TIMEOUT, env=env
-        )
-    except (subprocess.TimeoutExpired, FileNotFoundError):
-        return None
-    if proc.returncode != 0:
-        return None
-    return proc.stdout
+def _invoke_llm(prompt: str) -> str | None:
+    """Dispatch the prompt to the resolved LLM provider. Returns raw
+    stdout text or None when no provider is available / invocation
+    failed. Verdict extraction handled by `_extract_verdict`."""
+    output, _provider, _cfg = invoke_llm(prompt, SYSTEM_PROMPT)
+    return output
 
 
 JSON_FENCE_RE = re.compile(r"```(?:json)?\s*(\{.*?\})\s*```", re.DOTALL | re.IGNORECASE)
@@ -297,7 +274,7 @@ def _extract_verdict(cli_output: str) -> dict | None:
 
 
 def analyze_local_plugin(name: str, path: str, content_hash: str | None = None) -> dict | None:
-    """Run Claude analysis on a locally-installed plugin directory.
+    """Run LLM analysis on a locally-installed plugin directory.
 
     `content_hash` is used as cache key so re-scanning the same on-disk
     contents (e.g. across sessions) reuses the verdict.
@@ -319,10 +296,10 @@ def analyze_local_plugin(name: str, path: str, content_hash: str | None = None) 
         return prefiltered
 
     prompt = _build_user_prompt(bundle)
-    output = _invoke_claude(prompt)
+    output = _invoke_llm(prompt)
     verdict = _extract_verdict(output) if output else None
     if verdict is None:
-        return {"verdict": "ask", "reason": "claude analyzer returned no parseable verdict"}
+        return {"verdict": "ask", "reason": "llm analyzer returned no parseable verdict"}
 
     if content_hash:
         _cache_store(_cache_key("plugin-local", name, content_hash), verdict)
@@ -345,10 +322,10 @@ def analyze_package(ecosystem: str, name: str, version: str | None) -> dict | No
         return prefiltered
 
     prompt = _build_user_prompt(bundle)
-    output = _invoke_claude(prompt)
+    output = _invoke_llm(prompt)
     verdict = _extract_verdict(output) if output else None
     if verdict is None:
-        return {"verdict": "ask", "reason": "claude analyzer returned no parseable verdict"}
+        return {"verdict": "ask", "reason": "llm analyzer returned no parseable verdict"}
 
     _cache_store(key, verdict)
     return verdict
