@@ -7,7 +7,7 @@ name = "watchdog-scanner"
 version = "0.3.0"
 description = "Pre-install supply-chain scanner: OSV CVE lookup + LLM source review for packages and Claude plugins. Engine + per-host adapters."
 readme = "README.md"
-requires-python = ">=3.9"
+requires-python = ">=3.10"
 license = { text = "MIT" }
 authors = [
     { name = "Maxlemore97", email = "30655722+Maxlemore97@users.noreply.github.com" }
@@ -18,7 +18,6 @@ classifiers = [
     "Intended Audience :: Developers",
     "License :: OSI Approved :: MIT License",
     "Programming Language :: Python :: 3",
-    "Programming Language :: Python :: 3.9",
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",

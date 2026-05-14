@@ -1,7 +1,6 @@
 """End-to-end I/O tests for the SessionStart hook entry."""
 from __future__ import annotations
 
-import importlib
 import io
 import json
 import os
@@ -14,10 +13,7 @@ from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
-
-def _load_module():
-    from adapters.claude_code.entry import session
-    return importlib.reload(session)
+from adapters.claude_code.entry import session as session_mod  # noqa: E402
 
 
 def _make_plugin(root: Path, name: str) -> Path:
@@ -38,10 +34,9 @@ class SessionHookTests(unittest.TestCase):
                    "WATCHDOG_MASCOT": "0"}
             out = io.StringIO()
             with patch.dict(os.environ, env, clear=False):
-                mod = _load_module()
                 with patch.object(sys, "stdin", io.StringIO("{}")), \
                      redirect_stdout(out):
-                    rc = mod.main()
+                    rc = session_mod.main()
             self.assertEqual(rc, 0)
             self.assertEqual(out.getvalue(), "")
 
@@ -57,17 +52,13 @@ class SessionHookTests(unittest.TestCase):
             }
             out = io.StringIO()
             with patch.dict(os.environ, env, clear=False):
-                mod = _load_module()
-                # scan_plugins default analyzer is bound at def-time; replace
-                # the wrapped call with a stub that returns deterministic
-                # findings, no LLM, no network.
                 def fake_scan(plugins, ledger, analyzer=None, max_scans=None):
                     findings = [("alpha", {"verdict": "deny", "risk": "high", "reason": "bad"})]
                     return findings, True, 0
-                with patch.object(mod, "scan_plugins", side_effect=fake_scan), \
+                with patch.object(session_mod, "scan_plugins", side_effect=fake_scan), \
                      patch.object(sys, "stdin", io.StringIO("{}")), \
                      redirect_stdout(out):
-                    rc = mod.main()
+                    rc = session_mod.main()
             self.assertEqual(rc, 0)
             body = json.loads(out.getvalue())
             ctx = body["hookSpecificOutput"]["additionalContext"]
@@ -78,10 +69,9 @@ class SessionHookTests(unittest.TestCase):
         env = {"WATCHDOG_DISABLE": "1", "WATCHDOG_MASCOT": "0"}
         out = io.StringIO()
         with patch.dict(os.environ, env, clear=False):
-            mod = _load_module()
             with patch.object(sys, "stdin", io.StringIO("{}")), \
                  redirect_stdout(out):
-                rc = mod.main()
+                rc = session_mod.main()
         self.assertEqual(rc, 0)
         self.assertEqual(out.getvalue(), "")
 

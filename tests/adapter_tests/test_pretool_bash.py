@@ -6,7 +6,6 @@ the local `claude` CLI.
 """
 from __future__ import annotations
 
-import importlib
 import io
 import json
 import os
@@ -18,12 +17,7 @@ from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
-
-def _load_module():
-    """Re-import the entry module under the current env so module-level
-    env reads (MODE, WATCHDOG_DISABLE, ...) reflect the test env."""
-    from adapters.claude_code.entry import pretool_bash
-    return importlib.reload(pretool_bash)
+from adapters.claude_code.entry import pretool_bash  # noqa: E402
 
 
 def _run(payload: dict, env: dict | None = None,
@@ -31,12 +25,11 @@ def _run(payload: dict, env: dict | None = None,
     env = {"WATCHDOG_DISABLE": "0", "WATCHDOG_MASCOT": "0", **(env or {})}
     out = io.StringIO()
     with patch.dict(os.environ, env, clear=False):
-        mod = _load_module()
-        with patch.object(mod, "preflight_packages",
+        with patch.object(pretool_bash, "preflight_packages",
                           return_value=preflight_return or {}), \
              patch.object(sys, "stdin", io.StringIO(json.dumps(payload))), \
              redirect_stdout(out):
-            rc = mod.main()
+            rc = pretool_bash.main()
     return rc, out.getvalue()
 
 
@@ -115,10 +108,9 @@ class PreToolBashIOTests(unittest.TestCase):
         env = {"WATCHDOG_DISABLE": "0", "WATCHDOG_MASCOT": "0"}
         out = io.StringIO()
         with patch.dict(os.environ, env, clear=False):
-            mod = _load_module()
             with patch.object(sys, "stdin", io.StringIO("not-json{{{")), \
                  redirect_stdout(out):
-                rc = mod.main()
+                rc = pretool_bash.main()
         self.assertEqual(rc, 0)
         self.assertEqual(out.getvalue(), "")
 

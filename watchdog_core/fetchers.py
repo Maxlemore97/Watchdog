@@ -92,6 +92,20 @@ def _read_member(extract_dir: Path, rel: Path) -> str | None:
         return None
 
 
+def _apply_tar_filter(tf):
+    """Set the safest extraction filter available so future Python
+    versions cannot silently allow path traversal or device files via
+    a hostile tar member. No-op on Python < 3.12."""
+    try:
+        tf.extraction_filter = tarfile.data_filter  # type: ignore[attr-defined]
+    except AttributeError:
+        try:
+            tf.extraction_filter = "data"  # type: ignore[assignment]
+        except (AttributeError, TypeError):
+            pass
+    return tf
+
+
 def _open_archive(raw: bytes, kind: str):
     """Open an in-memory archive. `kind` is one of:
     - "tar.gz"    gzip-compressed tar (npm, crates, gem inner)
@@ -102,10 +116,10 @@ def _open_archive(raw: bytes, kind: str):
     if kind == "zip":
         return zipfile.ZipFile(io.BytesIO(raw))
     if kind == "tar":
-        return tarfile.open(fileobj=io.BytesIO(raw), mode="r:")
+        return _apply_tar_filter(tarfile.open(fileobj=io.BytesIO(raw), mode="r:"))
     if kind == "tar.any":
-        return tarfile.open(fileobj=io.BytesIO(raw), mode="r:*")
-    return tarfile.open(fileobj=io.BytesIO(raw), mode="r:gz")
+        return _apply_tar_filter(tarfile.open(fileobj=io.BytesIO(raw), mode="r:*"))
+    return _apply_tar_filter(tarfile.open(fileobj=io.BytesIO(raw), mode="r:gz"))
 
 
 def _extract_tar(

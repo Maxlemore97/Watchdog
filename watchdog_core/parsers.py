@@ -205,6 +205,43 @@ def _extract_subshells(command: str) -> list[str]:
     return out
 
 
+SHELL_OPERATORS = {"&&", "||", ";", "|", "&"}
+_NAIVE_OPERATOR_RE = re.compile(r"&&|;|\|\|")
+
+
+def _split_on_shell_operators(command: str) -> list[str]:
+    """Split `command` on top-level shell operators (`&&`, `||`, `;`) while
+    respecting quoting. Falls back to a naive regex split if shlex
+    tokenization fails (e.g. unbalanced quotes).
+    """
+    try:
+        # Restrict punctuation_chars to true shell operators so version
+        # specifiers like `requests>=2.0` are NOT split on `>` / `<`.
+        lexer = shlex.shlex(command, posix=True, punctuation_chars="&|;")
+        lexer.whitespace_split = True
+        tokens = list(lexer)
+    except ValueError:
+        return [seg for seg in _NAIVE_OPERATOR_RE.split(command) if seg]
+
+    if not tokens:
+        return []
+
+    segments: list[list[str]] = [[]]
+    for tok in tokens:
+        if tok in {"&&", "||", ";"}:
+            segments.append([])
+            continue
+        segments[-1].append(tok)
+
+    out: list[str] = []
+    for seg_tokens in segments:
+        if not seg_tokens:
+            continue
+        # Re-quote tokens so downstream shlex.split round-trips correctly.
+        out.append(" ".join(shlex.quote(t) for t in seg_tokens))
+    return out
+
+
 def collect_packages(
     command: str,
     resolve_version_fn: Callable[[Package], Package] | None = None,
@@ -233,7 +270,7 @@ def collect_packages(
             return
         for inner in _extract_subshells(cmd):
             _walk(inner, depth + 1)
-        for segment in re.split(r"&&|;|\|\|", cmd):
+        for segment in _split_on_shell_operators(cmd):
             seg = segment.strip()
             if not seg or seg in seen:
                 continue

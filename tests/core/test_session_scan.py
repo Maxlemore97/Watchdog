@@ -129,6 +129,34 @@ class LedgerTests(unittest.TestCase):
                 ledger = session_scan.load_ledger()
                 self.assertEqual(ledger, {"version": 1, "entries": {}})
 
+    def test_concurrent_save_yields_valid_json(self):
+        """Two sessions writing the ledger at once must never leave a
+        half-written file. save_ledger uses tmpfile + os.replace, which
+        is atomic on POSIX."""
+        import threading
+
+        with tempfile.TemporaryDirectory() as tmp:
+            cache_dir = Path(tmp)
+            ledger_path = cache_dir / "vetted_plugins.json"
+            with mock.patch.object(session_scan, "CACHE_DIR", cache_dir), \
+                 mock.patch.object(session_scan, "LEDGER_PATH", ledger_path):
+                def writer(i):
+                    session_scan.save_ledger({
+                        "version": 1,
+                        "entries": {f"p{i}": {"content_hash": f"h{i}"}},
+                    })
+
+                threads = [threading.Thread(target=writer, args=(i,)) for i in range(20)]
+                for t in threads:
+                    t.start()
+                for t in threads:
+                    t.join()
+
+                # File must exist and parse as valid JSON.
+                loaded = session_scan.load_ledger()
+                self.assertEqual(loaded["version"], 1)
+                self.assertEqual(len(loaded["entries"]), 1)
+
 
 class ScanTests(unittest.TestCase):
     def test_skips_unchanged_plugins(self):

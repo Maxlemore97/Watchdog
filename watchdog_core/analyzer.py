@@ -12,6 +12,7 @@ recursively re-invoke this analyzer.
 from __future__ import annotations
 
 import hashlib
+import html
 import json
 import os
 import re
@@ -170,7 +171,11 @@ def _build_user_prompt(bundle: ArtifactBundle) -> str:
         parts.append("fetch_notes: " + "; ".join(bundle.notes))
         parts.append("")
     for path, content in bundle.files.items():
-        parts.append(f'<UNTRUSTED kind="file" path="{path}">')
+        # path comes from registry-controlled archive members and must
+        # not be allowed to break out of the attribute value into the
+        # prompt body.
+        safe_path = html.escape(path, quote=True)
+        parts.append(f'<UNTRUSTED kind="file" path="{safe_path}">')
         parts.append(content)
         parts.append("</UNTRUSTED>")
         parts.append("")
@@ -215,6 +220,35 @@ def _invoke_claude(prompt: str) -> str | None:
     return proc.stdout
 
 
+JSON_FENCE_RE = re.compile(r"```(?:json)?\s*(\{.*?\})\s*```", re.DOTALL | re.IGNORECASE)
+VERDICT_OBJECT_RE = re.compile(
+    r"\{[^{}]*\"verdict\"\s*:\s*\"[^\"]+\"[^{}]*\}",
+    re.DOTALL,
+)
+
+
+def _candidate_verdict_jsons(text: str) -> list[str]:
+    """Return candidate JSON object substrings in priority order:
+    1. fenced ``` ```json ... ``` ``` block(s)
+    2. shallow object literal(s) containing a `"verdict"` key
+    3. greedy outermost `{...}` slice (legacy behaviour)
+    """
+    out: list[str] = []
+    for match in JSON_FENCE_RE.findall(text):
+        if match not in out:
+            out.append(match)
+    for match in VERDICT_OBJECT_RE.findall(text):
+        if match not in out:
+            out.append(match)
+    start = text.find("{")
+    end = text.rfind("}")
+    if start != -1 and end > start:
+        legacy = text[start : end + 1]
+        if legacy not in out:
+            out.append(legacy)
+    return out
+
+
 def _extract_verdict(cli_output: str) -> dict | None:
     if not cli_output:
         return None
@@ -243,21 +277,19 @@ def _extract_verdict(cli_output: str) -> dict | None:
     if not candidate_text:
         candidate_text = cli_output
 
-    start = candidate_text.find("{")
-    end = candidate_text.rfind("}")
-    if start == -1 or end <= start:
-        return None
-    try:
-        verdict = json.loads(candidate_text[start : end + 1])
-    except json.JSONDecodeError:
-        return None
-    if not isinstance(verdict, dict):
-        return None
-    verdict.setdefault("verdict", "ask")
-    if verdict["verdict"] not in {"allow", "deny", "ask"}:
-        verdict["verdict"] = "ask"
-    verdict.setdefault("reason", "no reason provided")
-    return verdict
+    for candidate in _candidate_verdict_jsons(candidate_text):
+        try:
+            parsed = json.loads(candidate)
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(parsed, dict):
+            continue
+        parsed.setdefault("verdict", "ask")
+        if parsed["verdict"] not in {"allow", "deny", "ask"}:
+            parsed["verdict"] = "ask"
+        parsed.setdefault("reason", "no reason provided")
+        return parsed
+    return None
 
 
 def analyze_local_plugin(name: str, path: str, content_hash: str | None = None) -> dict | None:

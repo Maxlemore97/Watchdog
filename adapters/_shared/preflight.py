@@ -11,6 +11,7 @@ caller bail out cleanly with an `ask` instead of hanging the host.
 from __future__ import annotations
 
 import time
+from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Iterable
 
 from watchdog_core import (
@@ -95,14 +96,25 @@ def preflight_packages(
     processed_claude = 0
 
     if mode in {"osv", "both"}:
-        for pkg in pkg_list:
+        # Parallelize OSV lookups so N packages × HTTP latency does not
+        # accumulate sequentially into the hook budget. Results are
+        # consumed in submission order so deny messages stay reproducible.
+        def _osv_one(pkg):
+            try:
+                return pkg, query_osv(pkg), None
+            except Exception as exc:  # noqa: BLE001 - propagated via tuple
+                return pkg, None, exc
+
+        workers = min(len(pkg_list), 8) if pkg_list else 1
+        with ThreadPoolExecutor(max_workers=workers) as ex:
+            osv_results = list(ex.map(_osv_one, pkg_list))
+
+        for pkg, vulns, exc in osv_results:
             if _over_budget():
                 budget_hit = True
                 break
             processed_osv += 1
-            try:
-                vulns = query_osv(pkg)
-            except Exception as exc:
+            if exc is not None:
                 decisions.append((offline_decision, f"OSV unreachable for {_pkg_label(pkg)}: {exc}"))
                 continue
             if not vulns:

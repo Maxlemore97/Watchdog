@@ -24,17 +24,28 @@ from watchdog_core import collect_packages, mascot
 from watchdog_core.osv import MIN_SEVERITY
 
 VALID_MODES = {"osv", "claude", "both"}
-MODE = os.environ.get("WATCHDOG_MODE", "both").strip().lower()
-if MODE not in VALID_MODES:
-    MODE = "both"
+VALID_DECISIONS = {"allow", "deny", "ask"}
 
-OFFLINE_DECISION = os.environ.get("WATCHDOG_OFFLINE_DECISION", "ask").strip().lower()
-if OFFLINE_DECISION not in {"allow", "deny", "ask"}:
-    OFFLINE_DECISION = "ask"
 
-WATCHDOG_DISABLE = os.environ.get("WATCHDOG_DISABLE", "0").strip().lower() in {"1", "true", "yes", "on"}
+def _mode() -> str:
+    val = os.environ.get("WATCHDOG_MODE", "both").strip().lower()
+    return val if val in VALID_MODES else "both"
 
-HOOK_BUDGET_SECS = float(os.environ.get("WATCHDOG_HOOK_BUDGET_SECS", "30"))
+
+def _offline_decision() -> str:
+    val = os.environ.get("WATCHDOG_OFFLINE_DECISION", "ask").strip().lower()
+    return val if val in VALID_DECISIONS else "ask"
+
+
+def _disabled() -> bool:
+    return os.environ.get("WATCHDOG_DISABLE", "0").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _hook_budget_secs() -> float:
+    try:
+        return float(os.environ.get("WATCHDOG_HOOK_BUDGET_SECS", "30"))
+    except ValueError:
+        return 30.0
 
 
 def emit(decision: str, reason: str) -> None:
@@ -58,7 +69,7 @@ def _event_for(verdict: str) -> str:
 
 
 def main() -> int:
-    if WATCHDOG_DISABLE:
+    if _disabled():
         return 0
     try:
         payload = json.load(sys.stdin)
@@ -74,12 +85,13 @@ def main() -> int:
     if not pkgs and not notes:
         return 0
 
+    mode = _mode()
     pkg_labels = [
         f"{p.ecosystem}:{p.name}{('@' + p.version) if p.version else ''}" for p in pkgs
     ]
     mascot.show(
         mascot.EVENT_INTERCEPT,
-        ["Install command intercepted.", f"Mode: {MODE}, threshold: {MIN_SEVERITY}", *pkg_labels, *notes],
+        ["Install command intercepted.", f"Mode: {mode}, threshold: {MIN_SEVERITY}", *pkg_labels, *notes],
     )
     if pkg_labels:
         mascot.show(mascot.EVENT_PLUGIN_INFO, pkg_labels)
@@ -87,9 +99,9 @@ def main() -> int:
     result = preflight_packages(
         pkgs,
         notes,
-        mode=MODE,
-        offline_decision=OFFLINE_DECISION,
-        budget_secs=HOOK_BUDGET_SECS,
+        mode=mode,
+        offline_decision=_offline_decision(),
+        budget_secs=_hook_budget_secs(),
     )
 
     verdict = result["verdict"]

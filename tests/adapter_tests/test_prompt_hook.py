@@ -1,7 +1,6 @@
 """End-to-end I/O tests for the UserPromptSubmit hook entry."""
 from __future__ import annotations
 
-import importlib
 import io
 import json
 import os
@@ -13,10 +12,7 @@ from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
-
-def _load_module():
-    from adapters.claude_code.entry import prompt
-    return importlib.reload(prompt)
+from adapters.claude_code.entry import prompt as prompt_mod  # noqa: E402
 
 
 def _run(prompt_text: str, analyzer_return=None, env: dict | None = None):
@@ -24,11 +20,10 @@ def _run(prompt_text: str, analyzer_return=None, env: dict | None = None):
     payload = {"prompt": prompt_text}
     out = io.StringIO()
     with patch.dict(os.environ, env, clear=False):
-        mod = _load_module()
-        with patch.object(mod, "analyze_package", return_value=analyzer_return), \
+        with patch.object(prompt_mod, "analyze_package", return_value=analyzer_return), \
              patch.object(sys, "stdin", io.StringIO(json.dumps(payload))), \
              redirect_stdout(out):
-            rc = mod.main()
+            rc = prompt_mod.main()
     return rc, out.getvalue()
 
 

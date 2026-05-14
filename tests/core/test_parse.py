@@ -10,7 +10,6 @@ from watchdog_core.parsers import (  # noqa: E402
     collect_packages as _collect_packages,
     parse_install,
     parse_packages,
-    split_name_version,
 )
 
 
@@ -290,28 +289,21 @@ class SubshellTests(unittest.TestCase):
             [Package("npm", "a", None), Package("PyPI", "b", None)],
         )
 
+    def test_quoted_operator_does_not_split(self):
+        # The `;` inside the quoted echo argument must NOT split the
+        # command into two segments. Only the top-level `&&` should.
+        pkgs, _ = _collect_packages(
+            "echo 'a;b' && npm install evil",
+            resolve_version_fn=lambda p: p,
+        )
+        self.assertEqual(pkgs, [Package("npm", "evil", None)])
 
-class SplitNameVersionTests(unittest.TestCase):
-    def test_npm_simple(self):
-        self.assertEqual(split_name_version("lodash@4.17.20", "npm"), ("lodash", "4.17.20"))
-
-    def test_npm_scoped(self):
-        self.assertEqual(split_name_version("@scope/pkg@1.0.0", "npm"), ("@scope/pkg", "1.0.0"))
-
-    def test_npm_scoped_no_version(self):
-        self.assertEqual(split_name_version("@scope/pkg", "npm"), ("@scope/pkg", None))
-
-    def test_pip_eq(self):
-        self.assertEqual(split_name_version("requests==2.0", "pip"), ("requests", "2.0"))
-
-    def test_pip_range(self):
-        self.assertEqual(split_name_version("requests>=2.0", "pip"), ("requests", None))
-
-    def test_cargo(self):
-        self.assertEqual(split_name_version("serde@1.0", "cargo"), ("serde", "1.0"))
-
-    def test_composer(self):
-        self.assertEqual(split_name_version("foo/bar:^1.0", "composer"), ("foo/bar", "^1.0"))
+    def test_quoted_double_operator_does_not_split(self):
+        pkgs, _ = _collect_packages(
+            'echo "a && b" ; npm install evil',
+            resolve_version_fn=lambda p: p,
+        )
+        self.assertEqual(pkgs, [Package("npm", "evil", None)])
 
 
 class ParallelResolveTests(unittest.TestCase):

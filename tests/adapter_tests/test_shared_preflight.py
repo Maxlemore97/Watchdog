@@ -157,5 +157,43 @@ class BudgetTests(unittest.TestCase):
         self.assertEqual(result["verdict"], "allow")
 
 
+class OsvParallelTests(unittest.TestCase):
+    """OSV lookups must run in parallel across packages so N×latency
+    does not blow the hook budget."""
+
+    def test_osv_runs_in_parallel(self):
+        import time as _time
+
+        def slow(_pkg):
+            _time.sleep(0.05)
+            return []
+
+        pkgs = [_pkg(name) for name in ("a", "b", "c", "d", "e", "f")]
+        with patch.object(pf, "query_osv", side_effect=slow), \
+             patch.object(pf, "analyze_package", return_value=None):
+            start = _time.monotonic()
+            result = pf.preflight_packages(pkgs, [], mode="osv")
+            elapsed = _time.monotonic() - start
+        self.assertEqual(result["verdict"], "allow")
+        # Sequential would be ~0.30s; parallel with 8 workers fits well
+        # under 0.20s even on a loaded CI runner.
+        self.assertLess(elapsed, 0.20)
+
+    def test_osv_error_still_records_offline_decision(self):
+        def boom(pkg):
+            if pkg.name == "bad":
+                raise OSError("net")
+            return []
+
+        with patch.object(pf, "query_osv", side_effect=boom), \
+             patch.object(pf, "analyze_package", return_value=None):
+            result = pf.preflight_packages(
+                [_pkg("good"), _pkg("bad")], [], mode="osv",
+                offline_decision="deny",
+            )
+        self.assertEqual(result["verdict"], "deny")
+        self.assertIn("OSV unreachable for npm:bad", result["reason"])
+
+
 if __name__ == "__main__":
     unittest.main()

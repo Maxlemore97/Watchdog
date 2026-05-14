@@ -20,6 +20,10 @@ from watchdog_core import discover_plugins, load_ledger, mascot, save_ledger, sc
 from watchdog_core.policy import rank
 
 
+def _disabled() -> bool:
+    return os.environ.get("WATCHDOG_DISABLE", "").strip().lower() in {"1", "true", "yes", "on"}
+
+
 def _emit_session_context(text: str) -> None:
     payload = {
         "hookSpecificOutput": {
@@ -45,7 +49,7 @@ def _format_summary(findings, skipped: int) -> str:
 
 
 def main() -> int:
-    if os.environ.get("WATCHDOG_DISABLE", "").strip().lower() in {"1", "true", "yes", "on"}:
+    if _disabled():
         return 0
     try:
         sys.stdin.read()

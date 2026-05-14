@@ -22,6 +22,10 @@ from watchdog_core import (
 from watchdog_core.policy import rank
 
 
+def _disabled() -> bool:
+    return os.environ.get("WATCHDOG_DISABLE", "").strip().lower() in {"1", "true", "yes", "on"}
+
+
 def _emit(decision: str | None, additional_context: str | None) -> None:
     payload: dict = {}
     if decision:
@@ -39,7 +43,7 @@ def _emit(decision: str | None, additional_context: str | None) -> None:
 
 
 def main() -> int:
-    if os.environ.get("WATCHDOG_DISABLE", "").lower() in {"1", "true", "yes"}:
+    if _disabled():
         return 0
     try:
         payload = json.load(sys.stdin)
