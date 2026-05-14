@@ -1,0 +1,130 @@
+version: 2
+
+project_name: watchdog
+
+before:
+  hooks:
+    - go mod tidy
+
+builds:
+  - id: watchdog-pretool
+    main: ./cmd/watchdog-pretool
+    binary: watchdog-pretool
+    env: [CGO_ENABLED=0]
+    goos: [linux, darwin, windows]
+    goarch: [amd64, arm64]
+    flags: ["-trimpath"]
+    ldflags: ["-s -w -X main.Version={{.Version}}"]
+  - id: watchdog-session
+    main: ./cmd/watchdog-session
+    binary: watchdog-session
+    env: [CGO_ENABLED=0]
+    goos: [linux, darwin, windows]
+    goarch: [amd64, arm64]
+    flags: ["-trimpath"]
+    ldflags: ["-s -w -X main.Version={{.Version}}"]
+  - id: watchdog-prompt
+    main: ./cmd/watchdog-prompt
+    binary: watchdog-prompt
+    env: [CGO_ENABLED=0]
+    goos: [linux, darwin, windows]
+    goarch: [amd64, arm64]
+    flags: ["-trimpath"]
+    ldflags: ["-s -w -X main.Version={{.Version}}"]
+  - id: watchdog-scan
+    main: ./cmd/watchdog-scan
+    binary: watchdog-scan
+    env: [CGO_ENABLED=0]
+    goos: [linux, darwin, windows]
+    goarch: [amd64, arm64]
+    flags: ["-trimpath"]
+    ldflags: ["-s -w -X main.Version={{.Version}}"]
+  - id: watchdog-mcp
+    main: ./cmd/watchdog-mcp
+    binary: watchdog-mcp
+    env: [CGO_ENABLED=0]
+    goos: [linux, darwin, windows]
+    goarch: [amd64, arm64]
+    flags: ["-trimpath"]
+    ldflags: ["-s -w -X main.Version={{.Version}}"]
+  - id: watchdog-shim
+    main: ./cmd/watchdog-shim
+    binary: watchdog-shim
+    env: [CGO_ENABLED=0]
+    goos: [linux, darwin, windows]
+    goarch: [amd64, arm64]
+    flags: ["-trimpath"]
+    ldflags: ["-s -w -X main.Version={{.Version}}"]
+  - id: watchdog-shim-exec
+    main: ./cmd/watchdog-shim-exec
+    binary: watchdog-shim-exec
+    env: [CGO_ENABLED=0]
+    goos: [linux, darwin, windows]
+    goarch: [amd64, arm64]
+    flags: ["-trimpath"]
+    ldflags: ["-s -w -X main.Version={{.Version}}"]
+  - id: watchdog-action
+    main: ./cmd/watchdog-action
+    binary: watchdog-action
+    env: [CGO_ENABLED=0]
+    goos: [linux, darwin, windows]
+    goarch: [amd64, arm64]
+    flags: ["-trimpath"]
+    ldflags: ["-s -w -X main.Version={{.Version}}"]
+
+archives:
+  - id: default
+    name_template: >-
+      watchdog_{{ .Version }}_
+      {{- if eq .Os "darwin" }}darwin
+      {{- else if eq .Os "linux" }}linux
+      {{- else if eq .Os "windows" }}windows
+      {{- else }}{{ .Os }}{{ end }}_
+      {{- if eq .Arch "amd64" }}amd64
+      {{- else if eq .Arch "arm64" }}arm64
+      {{- else }}{{ .Arch }}{{ end }}
+    formats: [tar.gz]
+    format_overrides:
+      - goos: windows
+        formats: [zip]
+    files:
+      - README.md
+      - SECURITY.md
+      - LICENSE*
+
+checksum:
+  name_template: checksums.txt
+
+snapshot:
+  version_template: "{{ incpatch .Version }}-snapshot-{{ .ShortCommit }}"
+
+changelog:
+  use: github
+  sort: asc
+  filters:
+    exclude:
+      - "^docs:"
+      - "^test:"
+      - "^chore:"
+      - "Merge pull request"
+      - "Merge branch"
+
+release:
+  github:
+    owner: Maxlemore97
+    name: Watchdog
+  draft: false
+  prerelease: auto
+  name_template: "v{{ .Version }}"
+  header: |
+    ## Watchdog v{{ .Version }}
+
+    Single-binary install — no Python required.
+
+    ```sh
+    curl -fsSL https://raw.githubusercontent.com/Maxlemore97/Watchdog/main/install.sh | sh
+    ```
+
+    Or download the binary for your platform below.
+
+    See [SECURITY.md](https://github.com/Maxlemore97/Watchdog/blob/main/SECURITY.md) for the threat model and disclosure address.

@@ -5,36 +5,55 @@ on:
     branches: [main]
   pull_request:
 
+# Cancel in-flight runs when a new commit lands on the same ref so
+# we don't burn CI minutes on stale revisions.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   test:
-    name: tests (py${{ matrix.python-version }})
-    runs-on: ubuntu-latest
+    name: test (${{ matrix.os }} / go${{ matrix.go }})
+    runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
-        python-version: ["3.10", "3.11", "3.12"]
+        os: [ubuntu-latest, macos-latest, windows-latest]
+        go: ["1.22", "1.23"]
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-go@v5
         with:
-          python-version: ${{ matrix.python-version }}
-      - name: install
-        run: pip install -e ".[dev]"
-      - name: unittest
-        env:
-          WATCHDOG_MASCOT: "off"
-        run: python -m unittest discover -s tests -v
+          go-version: ${{ matrix.go }}
+      - name: build
+        run: go build ./...
+      - name: test
+        run: go test -race -count=1 ./...
 
-  typecheck:
-    name: pyright (informational)
+  vet:
+    name: go vet + staticcheck
     runs-on: ubuntu-latest
-    continue-on-error: true
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-go@v5
         with:
-          python-version: "3.12"
-      - name: install pyright
-        run: pip install pyright
-      - name: pyright
-        run: pyright watchdog_core adapters
+          go-version: "1.23"
+      - run: go vet ./...
+      - uses: dominikh/staticcheck-action@v1
+        with:
+          version: latest
+          install-go: false
+        continue-on-error: true
+
+  goreleaser-check:
+    name: goreleaser config valid
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.23"
+      - uses: goreleaser/goreleaser-action@v6
+        with:
+          version: "~> v2"
+          args: check
