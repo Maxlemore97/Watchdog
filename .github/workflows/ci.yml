@@ -38,3 +38,16 @@ jobs:
           version: latest
           install-go: false
         continue-on-error: true
+
+  goreleaser-check:
+    name: goreleaser config valid
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.23"
+      - uses: goreleaser/goreleaser-action@v6
+        with:
+          version: "~> v2"
+          args: check

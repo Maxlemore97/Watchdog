@@ -2,6 +2,7 @@ package osv
 
 import (
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -189,9 +190,95 @@ func TestQuery_Integration_LiveServer(t *testing.T) {
 	pkg := types.Package{Ecosystem: "npm", Name: "fake", Version: "1.0.0"}
 	want := []map[string]any{{"id": "GHSA-fake", "summary": "x"}}
 	CacheStore(pkg, want)
-	got := Query(pkg)
+	got, err := Query(pkg)
+	if err != nil {
+		t.Fatalf("Query: %v", err)
+	}
 	if len(got) != 1 || got[0]["id"] != "GHSA-fake" {
 		t.Errorf("Query returned %v, want cached", got)
+	}
+}
+
+// ---------- Query against httptest server -----------------------
+
+func TestQuery_LiveSuccessParsesVulns(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("WATCHDOG_CACHE_DIR", dir)
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != "POST" {
+			t.Errorf("expected POST, got %s", r.Method)
+		}
+		if ct := r.Header.Get("Content-Type"); ct != "application/json" {
+			t.Errorf("missing Content-Type: %q", ct)
+		}
+		body, _ := io.ReadAll(r.Body)
+		var payload map[string]any
+		_ = json.Unmarshal(body, &payload)
+		pkg, _ := payload["package"].(map[string]any)
+		if pkg["name"] != "lodash" || pkg["ecosystem"] != "npm" {
+			t.Errorf("unexpected package: %v", pkg)
+		}
+		_, _ = w.Write([]byte(`{"vulns":[{"id":"GHSA-x"}]}`))
+	}))
+	defer srv.Close()
+	t.Setenv("WATCHDOG_OSV_ENDPOINT", srv.URL)
+
+	pkg := types.Package{Ecosystem: "npm", Name: "lodash", Version: "4.0.0"}
+	got, err := Query(pkg)
+	if err != nil {
+		t.Fatalf("Query: %v", err)
+	}
+	if len(got) != 1 || got[0]["id"] != "GHSA-x" {
+		t.Errorf("unexpected vulns: %v", got)
+	}
+}
+
+func TestQuery_LiveEmptyVulns(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("WATCHDOG_CACHE_DIR", dir)
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{}`))
+	}))
+	defer srv.Close()
+	t.Setenv("WATCHDOG_OSV_ENDPOINT", srv.URL)
+
+	got, err := Query(types.Package{Ecosystem: "npm", Name: "clean", Version: "1"})
+	if err != nil {
+		t.Fatalf("Query: %v", err)
+	}
+	if got == nil || len(got) != 0 {
+		t.Errorf("want empty slice, got %v", got)
+	}
+}
+
+func TestQuery_LiveMalformedJSONReturnsError(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("WATCHDOG_CACHE_DIR", dir)
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`not json{{{`))
+	}))
+	defer srv.Close()
+	t.Setenv("WATCHDOG_OSV_ENDPOINT", srv.URL)
+
+	_, err := Query(types.Package{Ecosystem: "npm", Name: "x", Version: "1"})
+	if err == nil {
+		t.Error("expected error from malformed JSON")
+	}
+}
+
+func TestQuery_LiveServerClosedReturnsError(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("WATCHDOG_CACHE_DIR", dir)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
+	srv.Close() // close immediately
+	t.Setenv("WATCHDOG_OSV_ENDPOINT", srv.URL)
+
+	_, err := Query(types.Package{Ecosystem: "npm", Name: "x", Version: "1"})
+	if err == nil {
+		t.Error("expected error from closed server")
 	}
 }
 

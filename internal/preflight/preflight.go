@@ -31,17 +31,12 @@ const DefaultMaxPackages = 20
 // tests swap these out to avoid network and LLM calls. Keep package-
 // level so the production call sites stay simple.
 //
-// queryOSV returns (vulns, error). Production's osv.Query never
-// returns an error (it swallows network failure into an empty slice)
-// but the tuple shape lets tests simulate the offline-decision path.
+// osv.Query already returns (vulns, error); preflight uses err to
+// trigger the offline-decision branch.
 var (
-	queryOSV       func(types.Package) ([]map[string]any, error) = defaultQueryOSV
+	queryOSV       func(types.Package) ([]map[string]any, error) = osv.Query
 	analyzePackage                                               = analyzer.AnalyzePackage
 )
-
-func defaultQueryOSV(p types.Package) ([]map[string]any, error) {
-	return osv.Query(p), nil
-}
 
 // Options tweaks individual preflight calls.
 type Options struct {

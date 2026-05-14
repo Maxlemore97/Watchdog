@@ -3,6 +3,7 @@ package fetchers
 import (
 	"context"
 	"encoding/json"
+	"io"
 	"io/fs"
 	"os"
 	"os/exec"
@@ -41,7 +42,7 @@ func FetchPluginGit(gitURL, ref string) *types.ArtifactBundle {
 	defer os.RemoveAll(tmp)
 
 	notes := []string{}
-	files := map[string]string{}
+	files := newOrderedFiles()
 
 	args := []string{"clone", "--depth=1", "--filter=blob:none"}
 	if ref != "" {
@@ -92,7 +93,7 @@ func FetchPluginGit(gitURL, ref string) *types.ArtifactBundle {
 			if err != nil {
 				return nil
 			}
-			files[filepath.ToSlash(rel)] = content
+			files.set(filepath.ToSlash(rel), content)
 			return nil
 		})
 	}
@@ -102,13 +103,13 @@ func FetchPluginGit(gitURL, ref string) *types.ArtifactBundle {
 	if st, err := os.Lstat(rootManifest); err == nil &&
 		st.Mode().IsRegular() && st.Mode()&os.ModeSymlink == 0 {
 		if content, err := readSmallFile(rootManifest); err == nil {
-			files["plugin.json"] = content
+			files.set("plugin.json", content)
 		}
 	}
 
 	metadata := map[string]any{}
 	for _, key := range []string{"plugin.json", ".claude-plugin/plugin.json"} {
-		if content, ok := files[key]; ok {
+		if content, ok := files.data[key]; ok {
 			var parsed map[string]any
 			if err := json.Unmarshal([]byte(content), &parsed); err != nil {
 				notes = append(notes, key+" not valid JSON")
@@ -136,7 +137,7 @@ func FetchPluginLocal(name, dir string) *types.ArtifactBundle {
 	if err != nil || !info.IsDir() {
 		return nil
 	}
-	files := map[string]string{}
+	files := newOrderedFiles()
 	notes := []string{}
 
 	for _, sub := range pluginInterestingDirs {
@@ -164,7 +165,7 @@ func FetchPluginLocal(name, dir string) *types.ArtifactBundle {
 			if err != nil {
 				return nil
 			}
-			files[filepath.ToSlash(rel)] = content
+			files.set(filepath.ToSlash(rel), content)
 			return nil
 		})
 	}
@@ -176,13 +177,13 @@ func FetchPluginLocal(name, dir string) *types.ArtifactBundle {
 			continue
 		}
 		if content, err := readSmallFile(path); err == nil {
-			files[candidate] = content
+			files.set(candidate, content)
 		}
 	}
 
 	metadata := map[string]any{"local": true, "path": dir}
 	for _, key := range []string{".claude-plugin/plugin.json", "plugin.json"} {
-		if content, ok := files[key]; ok {
+		if content, ok := files.data[key]; ok {
 			var parsed map[string]any
 			if err := json.Unmarshal([]byte(content), &parsed); err == nil {
 				for k, v := range parsed {
@@ -213,10 +214,9 @@ func readSmallFile(p string) (string, error) {
 		return "", err
 	}
 	defer f.Close()
-	buf := make([]byte, MaxFileBytes*2)
-	n, err := f.Read(buf)
-	if err != nil && err.Error() != "EOF" {
+	buf, err := io.ReadAll(io.LimitReader(f, int64(MaxFileBytes*2)))
+	if err != nil {
 		return "", err
 	}
-	return string(buf[:n]), nil
+	return string(buf), nil
 }

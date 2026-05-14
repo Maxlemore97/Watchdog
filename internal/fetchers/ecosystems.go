@@ -88,9 +88,11 @@ func FetchNPM(name, version string) *types.ArtifactBundle {
 	if meta == nil {
 		return nil
 	}
-	files := map[string]string{}
+	files := newOrderedFiles()
 	notes := []string{}
 
+	// Insert risky-script entries FIRST so they survive the bundle
+	// cap even when the archive ships many large interesting files.
 	if scripts, ok := meta["scripts"].(map[string]any); ok {
 		risky := map[string]any{}
 		for k, v := range scripts {
@@ -100,7 +102,7 @@ func FetchNPM(name, version string) *types.ArtifactBundle {
 		}
 		if len(risky) > 0 {
 			data, _ := json.MarshalIndent(risky, "", "  ")
-			files["package.json#scripts"] = string(data)
+			files.set("package.json#scripts", string(data))
 		}
 	}
 
@@ -109,7 +111,7 @@ func FetchNPM(name, version string) *types.ArtifactBundle {
 	if tarball != "" {
 		raw := httpGet(tarball)
 		if raw != nil {
-			extracted, err := readTarGzMembers(raw, true,
+			extracted, order, err := readTarGzMembers(raw, true,
 				func(name string, parts []string) bool {
 					leaf := strings.ToLower(parts[len(parts)-1])
 					return npmInterestingNames[leaf]
@@ -120,9 +122,7 @@ func FetchNPM(name, version string) *types.ArtifactBundle {
 			if err != nil {
 				notes = append(notes, "tarball read failed: "+err.Error())
 			}
-			for k, v := range extracted {
-				files[k] = v
-			}
+			files.merge(extracted, order)
 		} else {
 			notes = append(notes, "tarball download failed")
 		}
@@ -163,7 +163,7 @@ func FetchPyPI(name, version string) *types.ArtifactBundle {
 	}
 	info, _ := meta["info"].(map[string]any)
 	urls, _ := meta["urls"].([]any)
-	files := map[string]string{}
+	files := newOrderedFiles()
 	notes := []string{}
 
 	var sdistURL string
@@ -181,14 +181,15 @@ func FetchPyPI(name, version string) *types.ArtifactBundle {
 		raw := httpGet(sdistURL)
 		if raw != nil {
 			var extracted map[string]string
+			var order []string
 			var err error
 			if strings.HasSuffix(sdistURL, ".zip") {
-				extracted, err = readZipMembers(raw, func(name string) bool {
+				extracted, order, err = readZipMembers(raw, func(name string) bool {
 					leaf := strings.ToLower(lastSegment(name))
 					return pypiInterestingNames[leaf]
 				})
 			} else {
-				extracted, err = readTarAnyMembers(raw, false,
+				extracted, order, err = readTarAnyMembers(raw, false,
 					func(_ string, parts []string) bool {
 						leaf := strings.ToLower(parts[len(parts)-1])
 						return pypiInterestingNames[leaf]
@@ -198,9 +199,7 @@ func FetchPyPI(name, version string) *types.ArtifactBundle {
 			if err != nil {
 				notes = append(notes, "sdist read failed: "+err.Error())
 			}
-			for k, v := range extracted {
-				files[k] = v
-			}
+			files.merge(extracted, order)
 		} else {
 			notes = append(notes, "sdist download failed")
 		}
@@ -255,14 +254,14 @@ func FetchCrates(name, version string) *types.ArtifactBundle {
 		chosen = firstString(crateInfo["max_stable_version"], asString(crateInfo["newest_version"]))
 	}
 
-	files := map[string]string{}
+	files := newOrderedFiles()
 	notes := []string{}
 
 	if chosen != "" {
 		dl := fmt.Sprintf("https://crates.io/api/v1/crates/%s/%s/download", safe, escape(chosen, ""))
 		raw := httpGet(dl)
 		if raw != nil {
-			extracted, err := readTarGzMembers(raw, false,
+			extracted, order, err := readTarGzMembers(raw, false,
 				func(name string, parts []string) bool {
 					leaf := strings.ToLower(parts[len(parts)-1])
 					isSrc := len(parts) >= 2 && parts[len(parts)-2] == "src" &&
@@ -273,9 +272,7 @@ func FetchCrates(name, version string) *types.ArtifactBundle {
 			if err != nil {
 				notes = append(notes, "crate tarball read failed: "+err.Error())
 			}
-			for k, v := range extracted {
-				files[k] = v
-			}
+			files.merge(extracted, order)
 		} else {
 			notes = append(notes, "crate download failed")
 		}
@@ -284,7 +281,7 @@ func FetchCrates(name, version string) *types.ArtifactBundle {
 	}
 
 	hasBuild := false
-	for p := range files {
+	for _, p := range files.order {
 		if cargoScriptFiles[strings.ToLower(path.Base(p))] {
 			hasBuild = true
 			break
@@ -325,7 +322,7 @@ func FetchRubyGems(name, version string) *types.ArtifactBundle {
 	if chosen == "" {
 		return nil
 	}
-	files := map[string]string{}
+	files := newOrderedFiles()
 	notes := []string{}
 
 	gemURL := fmt.Sprintf("https://rubygems.org/downloads/%s-%s.gem", safe, escape(chosen, ""))
@@ -336,7 +333,7 @@ func FetchRubyGems(name, version string) *types.ArtifactBundle {
 		if err != nil {
 			notes = append(notes, err.Error())
 		} else if inner != nil {
-			extracted, err := readTarGzMembers(inner, false,
+			extracted, order, err := readTarGzMembers(inner, false,
 				func(memberName string, parts []string) bool {
 					leaf := strings.ToLower(parts[len(parts)-1])
 					isExt := strings.Contains("/"+memberName, "/ext/") && gemInterestingExtNames[leaf]
@@ -349,16 +346,14 @@ func FetchRubyGems(name, version string) *types.ArtifactBundle {
 			if err != nil {
 				notes = append(notes, "inner gem tarball failed: "+err.Error())
 			}
-			for k, v := range extracted {
-				files[k] = v
-			}
+			files.merge(extracted, order)
 		}
 	} else {
 		notes = append(notes, "gem download failed")
 	}
 
 	hasNative := false
-	for p := range files {
+	for _, p := range files.order {
 		if strings.Contains("/"+p, "/ext/") {
 			hasNative = true
 			break
@@ -446,9 +441,11 @@ func FetchPackagist(name, version string) *types.ArtifactBundle {
 	dist, _ := chosen["dist"].(map[string]any)
 	distURL, _ := dist["url"].(string)
 
-	files := map[string]string{}
+	files := newOrderedFiles()
 	notes := []string{}
 
+	// Risky scripts FIRST so they survive the bundle cap.
+	hasInstallScripts := false
 	if scripts, ok := chosen["scripts"].(map[string]any); ok {
 		risky := map[string]any{}
 		for k, v := range scripts {
@@ -458,22 +455,21 @@ func FetchPackagist(name, version string) *types.ArtifactBundle {
 		}
 		if len(risky) > 0 {
 			data, _ := json.MarshalIndent(risky, "", "  ")
-			files["composer.json#scripts"] = string(data)
+			files.set("composer.json#scripts", string(data))
+			hasInstallScripts = true
 		}
 	}
 
 	if distURL != "" {
 		raw := httpGet(distURL)
 		if raw != nil {
-			extracted, err := readZipMembers(raw, func(memberName string) bool {
+			extracted, order, err := readZipMembers(raw, func(memberName string) bool {
 				return composerInterestingNames[strings.ToLower(lastSegment(memberName))]
 			})
 			if err != nil {
 				notes = append(notes, "zip read failed: "+err.Error())
 			}
-			for k, v := range extracted {
-				files[k] = v
-			}
+			files.merge(extracted, order)
 		} else {
 			notes = append(notes, "zip download failed")
 		}
@@ -488,7 +484,7 @@ func FetchPackagist(name, version string) *types.ArtifactBundle {
 		"authors":             chosen["authors"],
 		"license":             chosen["license"],
 		"require":             chosen["require"],
-		"has_install_scripts": files["composer.json#scripts"] != "",
+		"has_install_scripts": hasInstallScripts,
 	}
 	return &types.ArtifactBundle{
 		Ecosystem: "Packagist",
@@ -505,10 +501,10 @@ func FetchPackagist(name, version string) *types.ArtifactBundle {
 func readTarGzMembers(raw []byte, stripPackagePrefix bool,
 	predicate func(name string, parts []string) bool,
 	keyFn func(name string, parts []string) string,
-) (map[string]string, error) {
+) (map[string]string, []string, error) {
 	gz, err := gzip.NewReader(bytes.NewReader(raw))
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	defer gz.Close()
 	return walkTar(gz, stripPackagePrefix, predicate, keyFn)
@@ -517,7 +513,7 @@ func readTarGzMembers(raw []byte, stripPackagePrefix bool,
 func readTarAnyMembers(raw []byte, stripPackagePrefix bool,
 	predicate func(name string, parts []string) bool,
 	keyFn func(name string, parts []string) string,
-) (map[string]string, error) {
+) (map[string]string, []string, error) {
 	// Try gzip first; on failure assume uncompressed tar.
 	if gz, err := gzip.NewReader(bytes.NewReader(raw)); err == nil {
 		defer gz.Close()
@@ -546,12 +542,13 @@ func readGemDataTarGz(raw []byte) ([]byte, error) {
 	}
 }
 
-func readZipMembers(raw []byte, predicate func(name string) bool) (map[string]string, error) {
+func readZipMembers(raw []byte, predicate func(name string) bool) (map[string]string, []string, error) {
 	zr, err := zip.NewReader(bytes.NewReader(raw), int64(len(raw)))
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	out := map[string]string{}
+	var order []string
 	for _, f := range zr.File {
 		if !predicate(f.Name) {
 			continue
@@ -565,9 +562,12 @@ func readZipMembers(raw []byte, predicate func(name string) bool) (map[string]st
 		if err != nil {
 			continue
 		}
+		if _, exists := out[f.Name]; !exists {
+			order = append(order, f.Name)
+		}
 		out[f.Name] = string(buf)
 	}
-	return out, nil
+	return out, order, nil
 }
 
 // ---------- helpers ----------------------------------------------

@@ -126,13 +126,22 @@ func CacheStore(pkg types.Package, vulns []map[string]any) {
 	_ = os.Rename(tmp, path)
 }
 
-// Query looks up advisories for pkg on OSV.dev. Returns nil on any
-// network or parse failure so callers do not have to wrap. The blanket
-// recover in preflight remains belt-and-suspenders for unexpected
-// failure modes.
-func Query(pkg types.Package) []map[string]any {
+// EndpointURL points at OSV.dev by default; tests override via env.
+func endpointURL() string {
+	if v := os.Getenv("WATCHDOG_OSV_ENDPOINT"); v != "" {
+		return v
+	}
+	return Endpoint
+}
+
+// Query looks up advisories for pkg on OSV.dev. Returns
+// (vulns, error). On any network or parse failure err is non-nil so
+// the caller's offline-decision policy applies. Successful but empty
+// responses return ([]map[string]any{}, nil). Cache hits return
+// (cached, nil).
+func Query(pkg types.Package) ([]map[string]any, error) {
 	if cached := CacheLoad(pkg); cached != nil {
-		return cached
+		return cached, nil
 	}
 	body := map[string]any{
 		"package": map[string]string{"name": pkg.Name, "ecosystem": pkg.Ecosystem},
@@ -142,11 +151,11 @@ func Query(pkg types.Package) []map[string]any {
 	}
 	payload, err := json.Marshal(body)
 	if err != nil {
-		return []map[string]any{}
+		return nil, err
 	}
-	req, err := http.NewRequest("POST", Endpoint, bytes.NewReader(payload))
+	req, err := http.NewRequest("POST", endpointURL(), bytes.NewReader(payload))
 	if err != nil {
-		return []map[string]any{}
+		return nil, err
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("User-Agent", UserAgent)
@@ -158,7 +167,7 @@ func Query(pkg types.Package) []map[string]any {
 			"package": pkg.Ecosystem + ":" + pkg.Name,
 			"error":   truncate(err.Error(), 200),
 		})
-		return []map[string]any{}
+		return nil, err
 	}
 	defer resp.Body.Close()
 	raw, err := io.ReadAll(io.LimitReader(resp.Body, 5_000_000))
@@ -167,7 +176,7 @@ func Query(pkg types.Package) []map[string]any {
 			"package": pkg.Ecosystem + ":" + pkg.Name,
 			"error":   truncate(err.Error(), 200),
 		})
-		return []map[string]any{}
+		return nil, err
 	}
 	var data struct {
 		Vulns []map[string]any `json:"vulns"`
@@ -177,14 +186,14 @@ func Query(pkg types.Package) []map[string]any {
 			"package": pkg.Ecosystem + ":" + pkg.Name,
 			"error":   truncate(err.Error(), 200),
 		})
-		return []map[string]any{}
+		return nil, err
 	}
 	vulns := data.Vulns
 	if vulns == nil {
 		vulns = []map[string]any{}
 	}
 	CacheStore(pkg, vulns)
-	return vulns
+	return vulns, nil
 }
 
 func truncate(s string, n int) string {

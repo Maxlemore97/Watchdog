@@ -177,7 +177,15 @@ func handleOSVQuery(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallTool
 	}
 	version := req.GetString("version", "")
 	pkg := types.Package{Ecosystem: ecosystem, Name: name, Version: version}
-	vulns := osv.Query(pkg)
+	vulns, queryErr := osv.Query(pkg)
+	if queryErr != nil {
+		return mcp.NewToolResultJSON(map[string]any{
+			"error":     queryErr.Error(),
+			"vulns":     []map[string]any{},
+			"filtered":  []map[string]any{},
+			"threshold": osv.MinSeverity(),
+		})
+	}
 	return mcp.NewToolResultJSON(map[string]any{
 		"vulns":     vulns,
 		"filtered":  osv.FilterBySeverity(vulns),

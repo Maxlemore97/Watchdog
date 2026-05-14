@@ -15,7 +15,6 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"syscall"
 
 	"github.com/Maxlemore97/watchdog/internal/osv"
 	"github.com/Maxlemore97/watchdog/internal/parsers"
@@ -54,17 +53,10 @@ func shimDir() string {
 	return shim.DefaultShimDir()
 }
 
-// execReal replaces this process with the real binary. On Unix uses
-// syscall.Exec for true argv[0] semantics; on Windows spawns a child
-// and exits with its status.
-func execReal(real, toolname string, args []string) int {
-	argv := append([]string{toolname}, args...)
-	if err := syscall.Exec(real, argv, os.Environ()); err != nil {
-		fmt.Fprintf(os.Stderr, "watchdog-shim: failed to exec %s: %v\n", real, err)
-		return 127
-	}
-	return 0 // unreachable
-}
+// execReal replaces this process with the real binary. Implemented in
+// exec_unix.go (syscall.Exec for true argv[0] semantics) and
+// exec_windows.go (spawn child and exit with its status — Windows has
+// no exec-in-place primitive).
 
 func confirmTTY(reason string) bool {
 	fmt.Fprintf(os.Stderr, "watchdog: %s\n", reason)

@@ -45,6 +45,9 @@ func safeTarMember(h *tar.Header) bool {
 // already-decoded content (truncated to MaxFileBytes*2). Members that
 // fail safeTarMember or fail to decode are skipped.
 //
+// Returns (files, order, err). `order` preserves archive walk order
+// so downstream fitBundle eviction is deterministic.
+//
 // keyFn lets callers choose the dict key shape (e.g. strip leading
 // "package/" prefix for npm, keep full path for PyPI sdists).
 // predicate runs after path cleaning and lets callers keep or drop a
@@ -56,16 +59,17 @@ func walkTar(
 	stripPackagePrefix bool,
 	predicate func(name string, parts []string) bool,
 	keyFn func(name string, parts []string) string,
-) (map[string]string, error) {
+) (map[string]string, []string, error) {
 	tr := tar.NewReader(r)
 	out := map[string]string{}
+	var order []string
 	for {
 		h, err := tr.Next()
 		if errors.Is(err, io.EOF) {
 			break
 		}
 		if err != nil {
-			return out, err
+			return out, order, err
 		}
 		if !safeTarMember(h) {
 			continue
@@ -85,7 +89,10 @@ func walkTar(
 			continue
 		}
 		key := keyFn(h.Name, parts)
+		if _, exists := out[key]; !exists {
+			order = append(order, key)
+		}
 		out[key] = string(buf)
 	}
-	return out, nil
+	return out, order, nil
 }

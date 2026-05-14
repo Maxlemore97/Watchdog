@@ -102,17 +102,73 @@ func stringifyInt(n int) string {
 	return string(digits)
 }
 
-func fitBundle(files map[string]string) map[string]string {
+// orderedFiles preserves insertion order so fitBundle iterates in a
+// deterministic priority sequence. Fetchers MUST insert risky-script
+// entries (e.g. `package.json#scripts`, `composer.json#scripts`)
+// FIRST so they never get evicted by the bundle-size cap.
+//
+// Go maps have non-deterministic iteration order — relying on that
+// in fitBundle was a real security regression (risky scripts could
+// fall out of the LLM's view when an archive shipped many large
+// files). This type fixes that.
+type orderedFiles struct {
+	order []string
+	data  map[string]string
+}
+
+func newOrderedFiles() *orderedFiles {
+	return &orderedFiles{data: map[string]string{}}
+}
+
+// set inserts or updates an entry. New keys preserve their first
+// insertion position; re-inserts overwrite content but keep order.
+func (o *orderedFiles) set(name, content string) {
+	if _, exists := o.data[name]; !exists {
+		o.order = append(o.order, name)
+	}
+	o.data[name] = content
+}
+
+// merge inserts every entry of other in the order it was added.
+func (o *orderedFiles) merge(other map[string]string, order []string) {
+	if order != nil {
+		for _, k := range order {
+			if v, ok := other[k]; ok {
+				o.set(k, v)
+			}
+		}
+		return
+	}
+	// Fallback: sort keys for determinism when no explicit order.
+	keys := make([]string, 0, len(other))
+	for k := range other {
+		keys = append(keys, k)
+	}
+	sortKeys(keys)
+	for _, k := range keys {
+		o.set(k, other[k])
+	}
+}
+
+func sortKeys(s []string) {
+	for i := 1; i < len(s); i++ {
+		for j := i; j > 0 && s[j-1] > s[j]; j-- {
+			s[j-1], s[j] = s[j], s[j-1]
+		}
+	}
+}
+
+// fitBundle returns a map capped at MaxBundleBytes total. Iteration
+// order is `files.order` so callers control priority. Entries beyond
+// the cap are dropped silently.
+func fitBundle(files *orderedFiles) map[string]string {
 	out := map[string]string{}
 	used := 0
-	// Iterate in caller-provided insertion order via a slice.
-	// (Go maps don't preserve order; in practice fitBundle is called
-	// per-ecosystem with files inserted in a deterministic flow:
-	// risky-scripts first, then archive members in walk order.)
-	// We mirror the Python dict-insertion-order semantics by sorting
-	// keys here so the test surface is deterministic. The cap logic
-	// is what matters; ordering is best-effort.
-	for name, content := range files {
+	for _, name := range files.order {
+		content, ok := files.data[name]
+		if !ok {
+			continue
+		}
 		snippet := truncateString(content, MaxFileBytes)
 		if used+len(snippet) > MaxBundleBytes {
 			remain := MaxBundleBytes - used
