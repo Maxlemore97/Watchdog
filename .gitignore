@@ -1,11 +1,6 @@
-__pycache__/
-*.py[cod]
-*.egg-info/
-build/
 dist/
 .idea/
 .vscode/
 .DS_Store
 *.swp
-.pytest_cache/
 .cache/

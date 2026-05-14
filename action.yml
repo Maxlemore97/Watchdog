@@ -10,33 +10,33 @@ inputs:
     required: false
     default: deny
   model:
-    description: Claude model used by the analyzer.
+    description: LLM model used by the analyzer (default per provider).
     required: false
-    default: claude-haiku-4-5-20251001
+    default: ""
   base-ref:
     description: Base ref for the diff (default = pull_request base, else `main`).
     required: false
     default: ""
-  python-version:
-    description: Python interpreter used to run the analyzer.
+  version:
+    description: Watchdog release tag to install (default = the action ref, else `latest`).
     required: false
-    default: "3.11"
+    default: ""
 runs:
   using: composite
   steps:
-    - name: Set up Python
-      uses: actions/setup-python@v5
-      with:
-        python-version: ${{ inputs.python-version }}
     - name: Install Watchdog
       shell: bash
       env:
-        WATCHDOG_PIN: ${{ github.action_ref }}
+        WATCHDOG_VERSION: ${{ inputs.version || github.action_ref }}
+        WATCHDOG_INSTALL_DIR: ${{ github.workspace }}/.watchdog/bin
       run: |
-        version="${WATCHDOG_PIN:-0.3.0}"
-        # Strip leading 'v' if action_ref looks like a tag (v0.3.0 -> 0.3.0).
-        version="${version#v}"
-        pip install --quiet "watchdog-scanner==${version}"
+        # Skip the API call when an explicit tag was supplied; default
+        # to "latest" otherwise.
+        if [ -z "${WATCHDOG_VERSION}" ] || [ "${WATCHDOG_VERSION}" = "main" ]; then
+          WATCHDOG_VERSION="latest"
+        fi
+        curl -fsSL https://raw.githubusercontent.com/Maxlemore97/Watchdog/main/install.sh | sh
+        echo "${WATCHDOG_INSTALL_DIR}" >> "$GITHUB_PATH"
     - name: Fetch base ref
       shell: bash
       run: |
@@ -47,6 +47,6 @@ runs:
       shell: bash
       env:
         WATCHDOG_ACTION_FAIL_ON: ${{ inputs.fail-on }}
-        WATCHDOG_MODEL: ${{ inputs.model }}
+        WATCHDOG_LLM_MODEL: ${{ inputs.model }}
         WATCHDOG_BASE_REF: ${{ inputs.base-ref }}
       run: watchdog-action
