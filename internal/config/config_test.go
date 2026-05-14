@@ -61,7 +61,7 @@ func TestLoad_RejectsBadInt(t *testing.T) {
 	}
 }
 
-func TestLoad_NormalizesCaseAndWritesBack(t *testing.T) {
+func TestLoad_NormalizesCase(t *testing.T) {
 	t.Setenv("WATCHDOG_MODE", "BOTH")
 	t.Setenv("WATCHDOG_MIN_SEVERITY", "HIGH")
 	c, err := Load()
@@ -71,8 +71,21 @@ func TestLoad_NormalizesCaseAndWritesBack(t *testing.T) {
 	if c.Mode != "both" || c.MinSeverity != "high" {
 		t.Errorf("not normalized: %+v", c)
 	}
-	// writeBack should have stamped lowercased values back.
-	t.Setenv("WATCHDOG_MODE", c.Mode)
+}
+
+func TestDisabled(t *testing.T) {
+	for _, v := range []string{"1", "true", "yes", "on", "TRUE", "Yes"} {
+		t.Setenv("WATCHDOG_DISABLE", v)
+		if !Disabled() {
+			t.Errorf("Disabled(%q) = false, want true", v)
+		}
+	}
+	for _, v := range []string{"", "0", "false", "no", "off"} {
+		t.Setenv("WATCHDOG_DISABLE", v)
+		if Disabled() {
+			t.Errorf("Disabled(%q) = true, want false", v)
+		}
+	}
 }
 
 func TestLoad_AcceptsValidOffline(t *testing.T) {

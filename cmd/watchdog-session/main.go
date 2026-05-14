@@ -18,11 +18,6 @@ import (
 	"github.com/Maxlemore97/watchdog/internal/policy"
 )
 
-func disabled() bool {
-	v := strings.ToLower(strings.TrimSpace(os.Getenv("WATCHDOG_DISABLE")))
-	return v == "1" || v == "true" || v == "yes" || v == "on"
-}
-
 func emitContext(text string) {
 	resp := map[string]any{
 		"hookSpecificOutput": map[string]any{
@@ -62,7 +57,7 @@ func formatSummary(findings []ledger.ScanResult, skipped int) string {
 }
 
 func main() {
-	if disabled() {
+	if config.Disabled() {
 		return
 	}
 	_ = config.MustLoad()

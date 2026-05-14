@@ -162,6 +162,53 @@ func TestFindRealBinary_ReturnsEmptyWhenNoneFound(t *testing.T) {
 	}
 }
 
+// TestIsShimDirFirstOnPath_FirstWhenPrepended pins the doctor-style
+// PATH check: when the shim dir is the first PATH entry, install
+// commands hit the wrapper. Anything else means installs may bypass
+// scanning — the shim-exec dispatcher warns on a TTY in that case.
+func TestIsShimDirFirstOnPath_FirstWhenPrepended(t *testing.T) {
+	shimDir := t.TempDir()
+	other := t.TempDir()
+	t.Setenv("PATH", shimDir+string(os.PathListSeparator)+other)
+	if !IsShimDirFirstOnPath(shimDir) {
+		t.Errorf("shim dir at front of PATH not detected")
+	}
+}
+
+func TestIsShimDirFirstOnPath_NotFirstWhenAppended(t *testing.T) {
+	shimDir := t.TempDir()
+	other := t.TempDir()
+	t.Setenv("PATH", other+string(os.PathListSeparator)+shimDir)
+	if IsShimDirFirstOnPath(shimDir) {
+		t.Errorf("shim dir mid-PATH must NOT be reported as first")
+	}
+}
+
+// TestFindRealBinary_StillResolvesWhenShimNotFirst verifies the
+// dispatcher locates the real binary even when the shim dir is not
+// the first PATH entry. Hot-path for the "user forgot to prepend"
+// misconfig: resolution must still succeed; only the PATH-order
+// warning fires elsewhere.
+func TestFindRealBinary_StillResolvesWhenShimNotFirst(t *testing.T) {
+	realDir := t.TempDir()
+	shimDir := t.TempDir()
+	realPath := filepath.Join(realDir, "npm")
+	if err := os.WriteFile(realPath, []byte("#!/bin/sh\necho real"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	shimPath := filepath.Join(shimDir, "npm")
+	if err := os.WriteFile(shimPath, []byte("#!/bin/sh\necho shim"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// realDir first, shimDir second — opposite of the intended order.
+	t.Setenv("PATH", realDir+string(os.PathListSeparator)+shimDir)
+	got := FindRealBinary("npm", []string{shimDir})
+	want, _ := filepath.Abs(realPath)
+	if got != want {
+		t.Errorf("got %q want %q", got, want)
+	}
+}
+
 func TestWindowsWrapperOnWindows(t *testing.T) {
 	if runtime.GOOS != "windows" {
 		t.Skip("Windows-specific")

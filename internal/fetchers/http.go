@@ -8,10 +8,10 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
-	"net/url"
 	"strconv"
-	"strings"
 	"time"
+
+	"github.com/Maxlemore97/watchdog/internal/urlenc"
 )
 
 const (
@@ -70,16 +70,7 @@ func httpGetJSONReal(rawURL string) map[string]any {
 }
 
 // escape mimics urllib.parse.quote(name, safe=safe).
-func escape(s, safe string) string {
-	enc := url.PathEscape(s)
-	for _, r := range safe {
-		old := url.PathEscape(string(r))
-		if old != string(r) {
-			enc = strings.ReplaceAll(enc, old, string(r))
-		}
-	}
-	return enc
-}
+func escape(s, safe string) string { return urlenc.Escape(s, safe) }
 
 func truncateString(text string, limit int) string {
 	if len(text) <= limit {

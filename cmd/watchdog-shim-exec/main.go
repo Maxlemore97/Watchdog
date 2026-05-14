@@ -23,11 +23,6 @@ import (
 	"github.com/Maxlemore97/watchdog/internal/shim"
 )
 
-func disabled() bool {
-	v := strings.ToLower(strings.TrimSpace(os.Getenv("WATCHDOG_DISABLE")))
-	return v == "1" || v == "true" || v == "yes" || v == "on"
-}
-
 func mode() string {
 	v := strings.ToLower(strings.TrimSpace(os.Getenv("WATCHDOG_MODE")))
 	if !preflight.ValidModes[v] {
@@ -104,7 +99,7 @@ func main() {
 	// Validate env config at startup unless disabled. We do this AFTER
 	// the args check (so a malformed invocation still gets the clear
 	// "missing tool name" message) but BEFORE any env-derived branches.
-	if !disabled() {
+	if !config.Disabled() {
 		_ = config.MustLoad()
 	}
 	toolname := filepath.Base(os.Args[1])
@@ -134,7 +129,7 @@ func main() {
 			"watchdog: WARNING — shim dir not first on PATH; installs may bypass scanning. Run `watchdog-shim doctor` for the fix.")
 	}
 
-	if disabled() {
+	if config.Disabled() {
 		os.Exit(execReal(real, toolname, toolArgs))
 	}
 	if !shim.IsShimmed(toolname) {

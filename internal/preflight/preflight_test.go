@@ -320,29 +320,28 @@ func TestPackages_FindingsIncludeOSVAboveThreshold(t *testing.T) {
 
 // ---------- edge paths ------------------------------------------
 
-// TestPackages_BudgetExceeded verifies that a slow analyzer trips
-// the wall-clock budget cap (preflight.go:101-208) and returns
-// `ask` with a budget-mentioning reason rather than blocking the
-// host indefinitely.
-func TestPackages_BudgetExceeded(t *testing.T) {
+// (TestPackages_BudgetExceeded removed — TestPackages_BudgetExceededMidway
+// asserts the same invariant with cheaper sleeps.)
+
+// TestRunOSVParallel_ZeroPackages pins the empty-input edge: the
+// worker pool builder does `min(len(pkgs), 8)`, which yields a
+// 0-cap channel when no packages are supplied. The loop must not
+// be entered and the call must return cleanly with no results.
+func TestRunOSVParallel_ZeroPackages(t *testing.T) {
 	restore := withStubs(t,
-		stubOK,
-		func(eco, name, ver string) map[string]any {
-			time.Sleep(200 * time.Millisecond)
-			return map[string]any{"verdict": "allow", "reason": "fine"}
+		func(types.Package) ([]map[string]any, error) {
+			t.Fatal("OSV stub invoked with zero packages")
+			return nil, nil
 		},
+		func(string, string, string) map[string]any { return nil },
 	)
 	defer restore()
-	r := Packages(
-		[]types.Package{pkg("a", "1"), pkg("b", "1"), pkg("c", "1")},
-		nil,
-		Options{Mode: "claude", BudgetSeconds: 0.05},
-	)
-	if r.Verdict != "ask" {
-		t.Errorf("budget verdict = %q, want ask", r.Verdict)
+	got := runOSVParallel(nil)
+	if got == nil {
+		// nil slice is fine — non-nil len-0 also fine. Either way: len == 0.
 	}
-	if !strings.Contains(r.Reason, "budget") {
-		t.Errorf("budget reason missing keyword: %q", r.Reason)
+	if len(got) != 0 {
+		t.Errorf("zero pkgs produced %d results", len(got))
 	}
 }
 

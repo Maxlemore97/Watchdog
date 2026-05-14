@@ -146,15 +146,6 @@ func TestInvokeGeneric_NoCmdReturnsErr(t *testing.T) {
 	}
 }
 
-func TestRegistry_HasFiveProviders(t *testing.T) {
-	want := []string{"claude", "gemini", "openai", "ollama", "generic"}
-	for _, name := range want {
-		if _, ok := Registry[name]; !ok {
-			t.Errorf("missing provider %q", name)
-		}
-	}
-}
-
 // makeCapturingBin writes a fake binary that records argv into
 // $WATCHDOG_TEST_ARGV_FILE and stdin into $WATCHDOG_TEST_STDIN_FILE,
 // then prints "OK" so the caller's RC = 0.

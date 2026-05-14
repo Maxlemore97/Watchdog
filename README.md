@@ -162,7 +162,7 @@ All knobs are env vars. Sensible defaults; nothing required.
 | `WATCHDOG_MODE`                 | `both`             | `osv` / `claude` / `both`                                     |
 | `WATCHDOG_MIN_SEVERITY`         | `low`              | OSV severity floor (`none`/`low`/`medium`/`high`/`critical`)  |
 | `WATCHDOG_OFFLINE_DECISION`     | `ask` (hooks) / `deny` (shim) | What to emit when OSV unreachable / LLM CLI missing |
-| `WATCHDOG_MAX_PACKAGES`         | `20`               | Above this, return `ask` without scanning                     |
+| `WATCHDOG_MAX_PACKAGES`         | `50`               | Above this, return `ask` without scanning                     |
 | `WATCHDOG_LLM_PROVIDER`         | `auto`             | `claude` / `gemini` / `openai` / `ollama` / `generic`         |
 | `WATCHDOG_LLM_MODEL`            | per-provider       | Override model name                                           |
 | `WATCHDOG_LLM_TIMEOUT`          | `60`               | Per-invocation timeout in seconds                             |
@@ -191,6 +191,8 @@ Watchdog shells out to whichever local CLI you have installed. Auto-detect order
 | Generic  | `WATCHDOG_LLM_CMD` | user-specified, stdin-piped     |
 
 Verdict cache keys include `(provider, model)`, so switching CLIs invalidates prior verdicts — a weaker model cannot whitewash a verdict cached by a stronger one.
+
+The analyzer only accepts a verdict that is either the model's entire trimmed output as one JSON object, or wrapped in a fenced ```` ```json ```` block. Prose-embedded JSON is ignored — a hostile artifact that the model quotes back in its response cannot smuggle a forged verdict object. Unparseable output falls through to `ask`.
 
 ---
 

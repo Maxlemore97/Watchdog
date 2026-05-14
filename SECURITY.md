@@ -23,7 +23,10 @@ machine running the agent**.
   analyzer's verdict. Defenses: `<UNTRUSTED>` tag wrapping with
   `html.escape` on path attributes and `</UNTRUSTED` neutralization in
   bodies; deterministic regex prefilter that runs before the LLM; strict
-  JSON verdict extraction (fenced or verdict-keyed shallow object only).
+  JSON verdict extraction — accepts only the entire trimmed output as a
+  JSON object OR a fenced ```` ```json ```` block. Prose-embedded objects
+  are ignored, closing the prior path where an LLM echoing hostile
+  artifact contents could surface a forged `{"verdict":"allow"}` blob.
 - **Malicious install commands** crafted to evade parsing. Defenses:
   `shlex.split` with explicit punctuation chars, recursive subshell
   extraction with depth cap, fail-`ask` on malformed shell.
@@ -40,7 +43,10 @@ machine running the agent**.
 - **OSV / registry network failure** masking a vulnerability. Defense:
   fail-closed default (`offline_decision="ask"`), per-call timeouts.
 - **DoS via install command fan-out**. Defense: `WATCHDOG_MAX_PACKAGES`
-  cap (default 20); larger commands return `ask` without scanning.
+  cap (default 50); larger commands return `ask` without scanning.
+- **`WATCHDOG_OSV_ENDPOINT` scheme abuse**. Only `http://` / `https://`
+  values override the default endpoint; a stray `file://` is rejected
+  so Query never turns into a local-file read.
 
 ### Out of scope
 
@@ -73,7 +79,13 @@ machine running the agent**.
 - **README / docs files** that document `curl … | sh` install patterns
   surface as `ask` rather than `deny` to avoid blocking legitimate
   packages whose READMEs reference common installers. Code/script
-  files keep the deny semantics.
+  files keep the deny semantics. Trade-off: a hostile package whose
+  payload lives only in `README.md` (no executable file with the same
+  signature) will reach the LLM stage as `ask`; the LLM is the
+  backstop for that path.
+- **`policy.WorstVerdict`** normalizes any non-canonical input string
+  to `ask` (matching the `Rank` collapse for unknown verdicts). Callers
+  that compare the result by string see only `allow`/`ask`/`deny`.
 
 ## Defense Layers
 

@@ -111,91 +111,11 @@ func Packages(pkgs []types.Package, notes []string, opts Options) Result {
 	processedClaude := 0
 
 	if mode == "osv" || mode == "both" {
-		osvResults := runOSVParallel(pkgs)
-		for _, r := range osvResults {
-			if overBudget() {
-				budgetHit = true
-				break
-			}
-			processedOSV++
-			if r.err != nil {
-				decisions = append(decisions, decision{
-					Verdict: offline,
-					Reason:  fmt.Sprintf("OSV unreachable for %s: %v", pkgLabel(r.pkg), r.err),
-				})
-				continue
-			}
-			if len(r.vulns) == 0 {
-				continue
-			}
-			filtered := osv.FilterBySeverity(r.vulns)
-			if len(filtered) > 0 {
-				decisions = append(decisions, decision{
-					Verdict: "deny",
-					Reason:  fmt.Sprintf("%s -> %s", pkgLabel(r.pkg), osv.Summarize(filtered)),
-				})
-				ids := make([]string, 0, len(filtered))
-				for _, v := range filtered {
-					id, _ := v["id"].(string)
-					if id == "" {
-						id = "?"
-					}
-					ids = append(ids, id)
-				}
-				findings = append(findings, map[string]any{
-					"package":             pkgLabel(r.pkg),
-					"source":              "osv",
-					"vulns":               ids,
-					"severity_threshold":  osv.MinSeverity(),
-				})
-			}
-		}
+		decisions, findings, processedOSV, budgetHit = osvPhase(pkgs, offline, overBudget, decisions, findings)
 	}
 
-	osvDenied := false
-	for _, d := range decisions {
-		if d.Verdict == "deny" {
-			osvDenied = true
-			break
-		}
-	}
-
-	if (mode == "claude" || mode == "both") && !osvDenied && !budgetHit {
-		for _, pkg := range pkgs {
-			if overBudget() {
-				budgetHit = true
-				break
-			}
-			processedClaude++
-			verdict := safeAnalyze(pkg)
-			if verdict == nil {
-				continue
-			}
-			if errStr, ok := verdict["__error__"].(string); ok {
-				decisions = append(decisions, decision{
-					Verdict: offline,
-					Reason:  fmt.Sprintf("analyzer error for %s: %s", pkgLabel(pkg), errStr),
-				})
-				continue
-			}
-			v, _ := verdict["verdict"].(string)
-			if v == "" {
-				v = "ask"
-			}
-			reason, _ := verdict["reason"].(string)
-			decisions = append(decisions, decision{
-				Verdict: v,
-				Reason:  fmt.Sprintf("[claude] %s: %s", pkgLabel(pkg), reason),
-			})
-			finding := map[string]any{
-				"package": pkgLabel(pkg),
-				"source":  "claude",
-			}
-			for k, val := range verdict {
-				finding[k] = val
-			}
-			findings = append(findings, finding)
-		}
+	if (mode == "claude" || mode == "both") && !budgetHit && !osvDenied(decisions) {
+		decisions, findings, processedClaude, budgetHit = llmPhase(pkgs, offline, overBudget, decisions, findings)
 	}
 
 	if budgetHit {
@@ -250,6 +170,112 @@ func Packages(pkgs []types.Package, notes []string, opts Options) Result {
 type decision struct {
 	Verdict string
 	Reason  string
+}
+
+// osvPhase runs OSV.dev queries in parallel and appends one decision
+// per package that errors or carries a finding at-or-above threshold.
+// Returns updated (decisions, findings, processed-count, budget-hit).
+func osvPhase(
+	pkgs []types.Package, offline string, overBudget func() bool,
+	decisions []decision, findings []map[string]any,
+) ([]decision, []map[string]any, int, bool) {
+	osvResults := runOSVParallel(pkgs)
+	processed := 0
+	for _, r := range osvResults {
+		if overBudget() {
+			return decisions, findings, processed, true
+		}
+		processed++
+		if r.err != nil {
+			decisions = append(decisions, decision{
+				Verdict: offline,
+				Reason:  fmt.Sprintf("OSV unreachable for %s: %v", pkgLabel(r.pkg), r.err),
+			})
+			continue
+		}
+		if len(r.vulns) == 0 {
+			continue
+		}
+		filtered := osv.FilterBySeverity(r.vulns)
+		if len(filtered) == 0 {
+			continue
+		}
+		decisions = append(decisions, decision{
+			Verdict: "deny",
+			Reason:  fmt.Sprintf("%s -> %s", pkgLabel(r.pkg), osv.Summarize(filtered)),
+		})
+		ids := make([]string, 0, len(filtered))
+		for _, v := range filtered {
+			id, _ := v["id"].(string)
+			if id == "" {
+				id = "?"
+			}
+			ids = append(ids, id)
+		}
+		findings = append(findings, map[string]any{
+			"package":            pkgLabel(r.pkg),
+			"source":             "osv",
+			"vulns":              ids,
+			"severity_threshold": osv.MinSeverity(),
+		})
+	}
+	return decisions, findings, processed, false
+}
+
+// llmPhase runs the analyzer sequentially. Each non-nil verdict is
+// recorded; panics are recovered into a synthetic __error__ entry by
+// safeAnalyze. Returns updated (decisions, findings, processed, budget-hit).
+func llmPhase(
+	pkgs []types.Package, offline string, overBudget func() bool,
+	decisions []decision, findings []map[string]any,
+) ([]decision, []map[string]any, int, bool) {
+	processed := 0
+	for _, pkg := range pkgs {
+		if overBudget() {
+			return decisions, findings, processed, true
+		}
+		processed++
+		verdict := safeAnalyze(pkg)
+		if verdict == nil {
+			continue
+		}
+		if errStr, ok := verdict["__error__"].(string); ok {
+			decisions = append(decisions, decision{
+				Verdict: offline,
+				Reason:  fmt.Sprintf("analyzer error for %s: %s", pkgLabel(pkg), errStr),
+			})
+			continue
+		}
+		v, _ := verdict["verdict"].(string)
+		if v == "" {
+			v = "ask"
+		}
+		reason, _ := verdict["reason"].(string)
+		decisions = append(decisions, decision{
+			Verdict: v,
+			Reason:  fmt.Sprintf("[claude] %s: %s", pkgLabel(pkg), reason),
+		})
+		finding := map[string]any{
+			"package": pkgLabel(pkg),
+			"source":  "claude",
+		}
+		for k, val := range verdict {
+			finding[k] = val
+		}
+		findings = append(findings, finding)
+	}
+	return decisions, findings, processed, false
+}
+
+// osvDenied reports whether any decision so far is a deny — used to
+// short-circuit the LLM phase when OSV alone is enough to block.
+func osvDenied(decisions []decision) bool {
+	for _, d := range decisions {
+		if d.Verdict == "deny" {
+			return true
+		}
+	}
+	return false
 }
 
 type osvResult struct {

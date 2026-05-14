@@ -327,7 +327,16 @@ func FetchRubyGems(name, version string) *types.ArtifactBundle {
 		chosen, _ = meta["version"].(string)
 	}
 	if chosen == "" {
-		return nil
+		// Surface the failure mode as a bundle with notes rather than
+		// nil; the analyzer renders "no resolvable version" in the
+		// verdict reason instead of a generic "could not fetch".
+		return &types.ArtifactBundle{
+			Ecosystem: "RubyGems",
+			Name:      name,
+			Files:     map[string]string{},
+			Metadata:  map[string]any{},
+			Notes:     []string{"no resolvable version for " + name},
+		}
 	}
 	files := newOrderedFiles()
 	notes := []string{}

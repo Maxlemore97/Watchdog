@@ -273,31 +273,30 @@ func buildUserPrompt(b *types.ArtifactBundle) string {
 
 // ---------- verdict extraction ------------------------------------
 
-var (
-	jsonFenceRE     = regexp.MustCompile("(?si)```(?:json)?\\s*(\\{.*?\\})\\s*```")
-	verdictObjectRE = regexp.MustCompile(`(?s)\{[^{}]*"verdict"\s*:\s*"[^"]+"[^{}]*\}`)
-)
+var jsonFenceRE = regexp.MustCompile("(?si)```(?:json)?\\s*(\\{.*?\\})\\s*```")
 
 // candidateVerdictJSONs returns possible JSON object substrings in
-// priority order. Two tiers:
-//  1. fenced ```json … ``` blocks
-//  2. shallow object literals containing a "verdict" key
+// priority order. Two tiers, both strict:
+//  1. the entire trimmed output, when it parses as a JSON object
+//  2. fenced ```json … ``` blocks
 //
-// The Python implementation also had a greedy first-{ to last-}
-// fallback; it was dropped in 0.3 because it accepted arbitrary stray
-// brace pairs in LLM prose — an injection vector when fetched
-// content can influence the analyzer's output. Unparseable output
-// returns nil here and the caller defaults to "ask".
+// The legacy "shallow object literal containing a `verdict` key"
+// tier was dropped because it matched anywhere in the LLM's stdout —
+// a hostile artifact whose contents echoed back into the model's
+// response could land a forged `{"verdict":"allow"}` blob in prose
+// and steer the verdict to allow. Requiring either a clean envelope
+// or a fenced block means the model has to deliberately emit JSON
+// in a recognized framing; prose-embedded objects are ignored and
+// the caller defaults to "ask".
 func candidateVerdictJSONs(text string) []string {
 	var out []string
+	trimmed := strings.TrimSpace(text)
+	if strings.HasPrefix(trimmed, "{") && strings.HasSuffix(trimmed, "}") {
+		out = append(out, trimmed)
+	}
 	for _, m := range jsonFenceRE.FindAllStringSubmatch(text, -1) {
 		if len(m) >= 2 && !slices.Contains(out, m[1]) {
 			out = append(out, m[1])
-		}
-	}
-	for _, m := range verdictObjectRE.FindAllString(text, -1) {
-		if !slices.Contains(out, m) {
-			out = append(out, m)
 		}
 	}
 	return out

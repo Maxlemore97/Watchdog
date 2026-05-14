@@ -2,6 +2,7 @@ package parsers
 
 import (
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/Maxlemore97/watchdog/internal/types"
@@ -10,34 +11,13 @@ import (
 // identityResolve keeps tests pure (no network).
 func identityResolve(p types.Package) types.Package { return p }
 
+// Basic positive cases (npm/pip/cargo/gem/composer/uv/poetry plain
+// install lines) live in parity_test.go's table. Tests below cover
+// shapes the parity table doesn't: scoped-no-version, pnpm/yarn,
+// note text contents, malformed shell, url/path notes, specifier
+// strip.
+
 // ---------- ParseInstall — npm/pnpm/yarn -------------------------
-
-func TestParseInstall_NPMBasic(t *testing.T) {
-	pkgs, notes := ParseInstall("npm install lodash")
-	want := []types.Package{{Ecosystem: "npm", Name: "lodash"}}
-	if !reflect.DeepEqual(pkgs, want) {
-		t.Errorf("pkgs = %v, want %v", pkgs, want)
-	}
-	if len(notes) != 0 {
-		t.Errorf("notes = %v", notes)
-	}
-}
-
-func TestParseInstall_NPMVersioned(t *testing.T) {
-	pkgs, _ := ParseInstall("npm install lodash@4.17.21")
-	want := []types.Package{{Ecosystem: "npm", Name: "lodash", Version: "4.17.21"}}
-	if !reflect.DeepEqual(pkgs, want) {
-		t.Errorf("pkgs = %v, want %v", pkgs, want)
-	}
-}
-
-func TestParseInstall_ScopedNPM(t *testing.T) {
-	pkgs, _ := ParseInstall("npm install @scope/pkg@1.2.3")
-	want := []types.Package{{Ecosystem: "npm", Name: "@scope/pkg", Version: "1.2.3"}}
-	if !reflect.DeepEqual(pkgs, want) {
-		t.Errorf("pkgs = %v, want %v", pkgs, want)
-	}
-}
 
 func TestParseInstall_ScopedNoVersion(t *testing.T) {
 	pkgs, _ := ParseInstall("npm install @scope/pkg")
@@ -62,22 +42,6 @@ func TestParseInstall_YarnOnlyAdd(t *testing.T) {
 }
 
 // ---------- ParseInstall — pip/uv/poetry ------------------------
-
-func TestParseInstall_PipBasic(t *testing.T) {
-	pkgs, _ := ParseInstall("pip install requests")
-	want := []types.Package{{Ecosystem: "PyPI", Name: "requests"}}
-	if !reflect.DeepEqual(pkgs, want) {
-		t.Errorf("pkgs = %v, want %v", pkgs, want)
-	}
-}
-
-func TestParseInstall_PipPinned(t *testing.T) {
-	pkgs, _ := ParseInstall("pip install requests==2.31.0")
-	want := []types.Package{{Ecosystem: "PyPI", Name: "requests", Version: "2.31.0"}}
-	if !reflect.DeepEqual(pkgs, want) {
-		t.Errorf("pkgs = %v, want %v", pkgs, want)
-	}
-}
 
 func TestParseInstall_PipSpecifierStrippedToName(t *testing.T) {
 	pkgs, _ := ParseInstall("pip install requests>=2.0")
@@ -104,71 +68,7 @@ func TestParseInstall_PipEditableNote(t *testing.T) {
 	}
 }
 
-func TestParseInstall_UVPip(t *testing.T) {
-	pkgs, _ := ParseInstall("uv pip install httpx==0.27.0")
-	want := []types.Package{{Ecosystem: "PyPI", Name: "httpx", Version: "0.27.0"}}
-	if !reflect.DeepEqual(pkgs, want) {
-		t.Errorf("pkgs = %v, want %v", pkgs, want)
-	}
-}
-
-func TestParseInstall_UVAdd(t *testing.T) {
-	pkgs, _ := ParseInstall("uv add ruff")
-	want := []types.Package{{Ecosystem: "PyPI", Name: "ruff"}}
-	if !reflect.DeepEqual(pkgs, want) {
-		t.Errorf("pkgs = %v, want %v", pkgs, want)
-	}
-}
-
-func TestParseInstall_PoetryAdd(t *testing.T) {
-	pkgs, _ := ParseInstall("poetry add pydantic@2.5.0")
-	want := []types.Package{{Ecosystem: "PyPI", Name: "pydantic", Version: "2.5.0"}}
-	if !reflect.DeepEqual(pkgs, want) {
-		t.Errorf("pkgs = %v, want %v", pkgs, want)
-	}
-}
-
-// ---------- cargo/gem/composer ------------------------------------
-
-func TestParseInstall_CargoVersioned(t *testing.T) {
-	pkgs, _ := ParseInstall("cargo add serde@1.0.0")
-	want := []types.Package{{Ecosystem: "crates.io", Name: "serde", Version: "1.0.0"}}
-	if !reflect.DeepEqual(pkgs, want) {
-		t.Errorf("pkgs = %v, want %v", pkgs, want)
-	}
-}
-
-func TestParseInstall_GemBasic(t *testing.T) {
-	pkgs, _ := ParseInstall("gem install rake")
-	want := []types.Package{{Ecosystem: "RubyGems", Name: "rake"}}
-	if !reflect.DeepEqual(pkgs, want) {
-		t.Errorf("pkgs = %v, want %v", pkgs, want)
-	}
-}
-
-func TestParseInstall_ComposerVersioned(t *testing.T) {
-	pkgs, _ := ParseInstall("composer require monolog/monolog:2.9.0")
-	want := []types.Package{{Ecosystem: "Packagist", Name: "monolog/monolog", Version: "2.9.0"}}
-	if !reflect.DeepEqual(pkgs, want) {
-		t.Errorf("pkgs = %v, want %v", pkgs, want)
-	}
-}
-
-// ---------- guards: non-install, malformed --------------------
-
-func TestParseInstall_NonInstallSubcmd(t *testing.T) {
-	pkgs, _ := ParseInstall("npm test")
-	if len(pkgs) != 0 {
-		t.Errorf("npm test should yield no packages: %v", pkgs)
-	}
-}
-
-func TestParseInstall_UnknownBinary(t *testing.T) {
-	pkgs, _ := ParseInstall("ls install foo")
-	if len(pkgs) != 0 {
-		t.Errorf("unknown binary should yield no packages: %v", pkgs)
-	}
-}
+// ---------- guards: malformed shell ----------------------------
 
 func TestParseInstall_MalformedShellNotes(t *testing.T) {
 	pkgs, notes := ParseInstall(`npm install "unterminated`)
@@ -237,12 +137,52 @@ func TestCollectPackages_Subshell(t *testing.T) {
 	}
 }
 
+// TestCollectPackages_DepthCap pins the recursion guard: subshell
+// nesting beyond depth 3 must not parse further packages. A hostile
+// install could otherwise wrap an install N levels deep to dodge
+// detection or burn CPU.
 func TestCollectPackages_DepthCap(t *testing.T) {
-	// 4 nested levels — must not recurse forever.
-	pkgs, _ := CollectPackages(`bash -c "bash -c \"bash -c \\\"bash -c 'npm install x'\\\" \" "`, identityResolve)
-	// We don't assert specific pkg list (escaping makes that flaky);
-	// just that it returns without timing out.
-	_ = pkgs
+	// 5 levels deep — install hides at level 5. Depth cap = 3 means
+	// we should NOT see it. (Walk starts at depth 0; the install is
+	// reachable only via four ExtractSubshells calls from the root.)
+	deep := `bash -c 'bash -c "bash -c \"bash -c \\\"bash -c '\''npm install pwned'\'' \\\"\" "'`
+	pkgs, _ := CollectPackages(deep, identityResolve)
+	for _, p := range pkgs {
+		if p.Name == "pwned" {
+			t.Errorf("depth cap leaked: parsed pkg %q from level >3", p.Name)
+		}
+	}
+}
+
+// TestSplitOnOperators_NaiveFallbackOnMalformed pins the fail-closed
+// behavior on unbalanced quotes. tokenizeWithOps returns an error,
+// SplitOnOperators falls back to a naive `&& || ;` split. The
+// segment must still surface so the top-level parser can emit an
+// "ask" rather than silently dropping the command.
+func TestSplitOnOperators_NaiveFallbackOnMalformed(t *testing.T) {
+	// Unbalanced single quote → tokenizeWithOps errors out, naive
+	// split takes over. We just need at least one non-empty segment.
+	got := SplitOnOperators(`pip install 'unterminated && npm install foo`)
+	if len(got) == 0 {
+		t.Fatalf("naive fallback produced no segments")
+	}
+}
+
+// TestCollectPackages_MalformedShellYieldsNotes ensures malformed
+// shell (unbalanced quote) reaches ParseInstall which emits a
+// "malformed shell command" note. Preflight then returns "ask"
+// rather than fail-open "allow".
+func TestCollectPackages_MalformedShellYieldsNotes(t *testing.T) {
+	_, notes := CollectPackages(`npm install "unterminated`, identityResolve)
+	found := false
+	for _, n := range notes {
+		if strings.Contains(n, "malformed shell") {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("expected malformed-shell note, got %v", notes)
+	}
 }
 
 func TestCollectPackages_ResolverApplied(t *testing.T) {

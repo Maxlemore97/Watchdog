@@ -60,6 +60,56 @@ func TestSeverityRankOf_UnparseableFallsBack(t *testing.T) {
 	}
 }
 
+// TestSeverityRankOf_MixedCVSSAndUnknown pins worst-wins across
+// multiple CVSS entries plus an unparseable score: the highest
+// valid score determines the rank; unparseable entries are ignored
+// when at least one valid entry exists.
+func TestSeverityRankOf_MixedCVSSAndUnknown(t *testing.T) {
+	v := map[string]any{
+		"severity": []any{
+			map[string]any{"type": "CVSS_V3", "score": "3.5"},   // low
+			map[string]any{"type": "CVSS_V3", "score": "bogus"}, // ignored
+			map[string]any{"type": "CVSS_V3", "score": "9.1"},   // critical
+		},
+	}
+	if got := SeverityRankOf(v); got != SeverityRank["critical"] {
+		t.Errorf("mixed rank = %d, want critical (%d)", got, SeverityRank["critical"])
+	}
+}
+
+// TestSeverityRankOf_DBSpecificWinsOverCVSS pins precedence: an
+// explicit `database_specific.severity` label wins over any CVSS
+// score on the same record.
+func TestSeverityRankOf_DBSpecificWinsOverCVSS(t *testing.T) {
+	v := map[string]any{
+		"database_specific": map[string]any{"severity": "low"},
+		"severity":          []any{map[string]any{"type": "CVSS_V3", "score": "9.8"}},
+	}
+	if got := SeverityRankOf(v); got != SeverityRank["low"] {
+		t.Errorf("db_specific should win: got %d, want low (%d)", got, SeverityRank["low"])
+	}
+}
+
+// TestEndpointURL_RejectsNonHTTPS pins the defense against
+// WATCHDOG_OSV_ENDPOINT=file:///etc/passwd. Non-http(s) schemes
+// must never override the default — Query would otherwise turn
+// into a local-file read.
+func TestEndpointURL_RejectsNonHTTPS(t *testing.T) {
+	for _, bad := range []string{"file:///etc/passwd", "ftp://example/", "javascript:alert(1)", "/absolute/path"} {
+		t.Setenv("WATCHDOG_OSV_ENDPOINT", bad)
+		if got := endpointURL(); got != Endpoint {
+			t.Errorf("non-https %q allowed: got %q", bad, got)
+		}
+	}
+}
+
+func TestEndpointURL_AcceptsHTTPS(t *testing.T) {
+	t.Setenv("WATCHDOG_OSV_ENDPOINT", "https://example.com/query")
+	if got := endpointURL(); got != "https://example.com/query" {
+		t.Errorf("https override dropped: %q", got)
+	}
+}
+
 // ---------- filter --------------------------------------------------
 
 func TestFilterBySeverity_UnknownPassesLow(t *testing.T) {

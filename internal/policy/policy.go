@@ -20,9 +20,10 @@ func Rank(verdict string) int {
 	}
 }
 
-// WorstVerdict returns the worst verdict by Rank. Empty input → "ask"
-// (with no signal we require human review rather than silently
-// allowing).
+// WorstVerdict returns the worst verdict by Rank, normalized to one
+// of allow/ask/deny. Empty input → "ask". Unknown strings collapse to
+// "ask" (matching Rank's conservative default) so callers comparing
+// the result by string see canonical values, never the raw input.
 func WorstVerdict(verdicts []string) string {
 	best := ""
 	for _, v := range verdicts {
@@ -30,8 +31,9 @@ func WorstVerdict(verdicts []string) string {
 			best = v
 		}
 	}
-	if best == "" {
-		return "ask"
+	switch best {
+	case "allow", "ask", "deny":
+		return best
 	}
-	return best
+	return "ask"
 }

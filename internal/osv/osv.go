@@ -13,7 +13,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"net/url"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -23,6 +22,7 @@ import (
 	"github.com/Maxlemore97/watchdog/internal/log"
 	"github.com/Maxlemore97/watchdog/internal/paths"
 	"github.com/Maxlemore97/watchdog/internal/types"
+	"github.com/Maxlemore97/watchdog/internal/urlenc"
 )
 
 const (
@@ -132,11 +132,18 @@ func CacheStore(pkg types.Package, vulns []map[string]any) {
 }
 
 // EndpointURL points at OSV.dev by default; tests override via env.
+// Refuses non-http(s) schemes so a stray `file://` override cannot
+// turn the OSV lookup into a local-file read.
 func endpointURL() string {
-	if v := os.Getenv("WATCHDOG_OSV_ENDPOINT"); v != "" {
-		return v
+	v := strings.TrimSpace(os.Getenv("WATCHDOG_OSV_ENDPOINT"))
+	if v == "" {
+		return Endpoint
 	}
-	return Endpoint
+	low := strings.ToLower(v)
+	if !strings.HasPrefix(low, "http://") && !strings.HasPrefix(low, "https://") {
+		return Endpoint
+	}
+	return v
 }
 
 // Query looks up advisories for pkg on OSV.dev. Returns
@@ -372,18 +379,7 @@ func ResolveVersion(pkg types.Package) types.Package {
 
 // ---------- HTTP helpers ------------------------------------------
 
-func escape(s, safe string) string {
-	// url.PathEscape preserves nothing; we replicate Python's
-	// urllib.parse.quote(safe=safe) by post-decoding chars in `safe`.
-	enc := url.PathEscape(s)
-	for _, r := range safe {
-		old := url.PathEscape(string(r))
-		if old != string(r) {
-			enc = strings.ReplaceAll(enc, old, string(r))
-		}
-	}
-	return enc
-}
+func escape(s, safe string) string { return urlenc.Escape(s, safe) }
 
 func jsonGet(rawURL string) map[string]any {
 	req, err := http.NewRequest("GET", rawURL, nil)

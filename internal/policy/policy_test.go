@@ -30,7 +30,9 @@ func TestWorstVerdict(t *testing.T) {
 		{[]string{"allow", "ask"}, "ask"},
 		{[]string{"ask", "deny", "allow"}, "deny"},
 		{[]string{"deny", "deny"}, "deny"},
-		{[]string{"unknown"}, "unknown"}, // first wins when ranks equal
+		{[]string{"unknown"}, "ask"},          // non-canonical collapses to ask
+		{[]string{"banana", "allow"}, "ask"},  // unknown ranks equal to ask, ask wins
+		{[]string{"allow", "banana"}, "ask"},  // unknown still normalizes
 	}
 	for _, c := range cases {
 		if got := WorstVerdict(c.in); got != c.want {

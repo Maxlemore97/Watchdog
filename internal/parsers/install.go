@@ -47,14 +47,10 @@ var shellBinaries = map[string]bool{
 }
 
 // flagsWithArg lists flags that consume the next token (e.g. `-r reqs.txt`).
+// pip3 aliases pip in init() — single source of truth; updating one
+// can't silently leave the other behind.
 var flagsWithArg = map[string]map[string]bool{
 	"pip": {
-		"-r": true, "--requirement": true, "-c": true, "--constraint": true,
-		"-e": true, "--editable": true, "-t": true, "--target": true,
-		"-i": true, "--index-url": true, "--extra-index-url": true,
-		"-f": true, "--find-links": true, "--prefix": true, "--root": true, "--src": true,
-	},
-	"pip3": {
 		"-r": true, "--requirement": true, "-c": true, "--constraint": true,
 		"-e": true, "--editable": true, "-t": true, "--target": true,
 		"-i": true, "--index-url": true, "--extra-index-url": true,
@@ -93,6 +89,10 @@ var flagsWithArg = map[string]map[string]bool{
 	"composer": {
 		"--working-dir": true, "-d": true, "--repository": true, "--repository-url": true,
 	},
+}
+
+func init() {
+	flagsWithArg["pip3"] = flagsWithArg["pip"]
 }
 
 var urlPathPrefixes = []string{

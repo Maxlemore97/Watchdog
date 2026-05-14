@@ -17,11 +17,6 @@ import (
 	"github.com/Maxlemore97/watchdog/internal/policy"
 )
 
-func disabled() bool {
-	v := strings.ToLower(strings.TrimSpace(os.Getenv("WATCHDOG_DISABLE")))
-	return v == "1" || v == "true" || v == "yes" || v == "on"
-}
-
 type promptPayload struct {
 	Prompt string `json:"prompt"`
 }
@@ -51,7 +46,7 @@ type targetVerdict struct {
 }
 
 func main() {
-	if disabled() {
+	if config.Disabled() {
 		return
 	}
 	_ = config.MustLoad()

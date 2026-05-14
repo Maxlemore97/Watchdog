@@ -6,17 +6,13 @@
 // in WATCHDOG_MIN_SEVERITY silently became "low", and there was no
 // single point to document or validate the surface.
 //
-// Pattern: env is the transport (children inherit env from parents,
-// which the recursion guard at WATCHDOG_DISABLE relies on), but
-// Load() reads, validates, and normalizes every value at startup.
-// MustLoad() is for cmd/ entrypoints — bad config fails fast with a
-// clear stderr message instead of silently degrading.
-//
-// Downstream packages keep their existing os.Getenv reads (the
-// invasive alternative — threading *Config through every package —
-// would change ~30 function signatures with marginal user-visible
-// benefit). They observe the normalized values that Load wrote back
-// to the process env.
+// MustLoad() is for cmd/ entrypoints: it validates and aborts on bad
+// input so a typo in env config never silently degrades a security
+// default. Downstream packages keep reading os.Getenv directly. Load
+// does NOT mutate the process env — Setenv races with concurrent
+// readers in goroutines (see runOSVParallel) and the "normalize-then-
+// writeback" pattern offered false confidence: any package that ran
+// before MustLoad still saw raw values.
 package config
 
 import (
@@ -67,9 +63,8 @@ var (
 	validProviders    = map[string]bool{"auto": true, "claude": true, "gemini": true, "openai": true, "ollama": true, "generic": true}
 )
 
-// Load reads every WATCHDOG_* env var, validates it, and writes
-// normalized values back to the process env so downstream package
-// reads observe them. Returns the first validation error.
+// Load reads every WATCHDOG_* env var and validates it. Returns the
+// first validation error. Does NOT mutate the process env.
 func Load() (Config, error) {
 	c := Config{
 		Mode:            envLower("WATCHDOG_MODE", "both"),
@@ -125,8 +120,20 @@ func Load() (Config, error) {
 		return c, fmt.Errorf("WATCHDOG_LLM_PROVIDER=%q: want one of auto/claude/gemini/openai/ollama/generic", c.LLMProvider)
 	}
 
-	c.writeBack()
 	return c, nil
+}
+
+// Disabled reports whether WATCHDOG_DISABLE is set to a truthy value.
+// Hot path for hook entrypoints and the recursion guard inside
+// childEnv(); centralized here so every adapter agrees on what
+// "disabled" means.
+func Disabled() bool {
+	v := strings.ToLower(strings.TrimSpace(os.Getenv("WATCHDOG_DISABLE")))
+	switch v {
+	case "1", "true", "yes", "on":
+		return true
+	}
+	return false
 }
 
 // MustLoad calls Load and aborts the process on validation failure.
@@ -139,19 +146,6 @@ func MustLoad() Config {
 		os.Exit(2)
 	}
 	return c
-}
-
-// writeBack stamps normalized values back into the process env so
-// downstream packages that still read os.Getenv see the validated
-// shape (lower-cased, defaults filled).
-func (c Config) writeBack() {
-	_ = os.Setenv("WATCHDOG_MODE", c.Mode)
-	_ = os.Setenv("WATCHDOG_MIN_SEVERITY", c.MinSeverity)
-	if c.OfflineDecision != "" {
-		_ = os.Setenv("WATCHDOG_OFFLINE_DECISION", c.OfflineDecision)
-	}
-	_ = os.Setenv("WATCHDOG_LLM_PROVIDER", c.LLMProvider)
-	_ = os.Setenv("WATCHDOG_ACTION_FAIL_ON", c.ActionFailOn)
 }
 
 func envLower(name, def string) string {
