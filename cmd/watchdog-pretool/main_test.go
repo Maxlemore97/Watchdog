@@ -6,16 +6,22 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
 
 // buildBinary compiles watchdog-pretool into a tmpdir and returns its
 // path. Other tests in this file reuse it via package-level sync.
+// Appends .exe on Windows so exec.Command can resolve the binary.
 func buildBinary(t *testing.T) string {
 	t.Helper()
 	tmp := t.TempDir()
-	bin := filepath.Join(tmp, "watchdog-pretool")
+	name := "watchdog-pretool"
+	if runtime.GOOS == "windows" {
+		name += ".exe"
+	}
+	bin := filepath.Join(tmp, name)
 	cmd := exec.Command("go", "build", "-o", bin, ".")
 	cmd.Stderr = os.Stderr
 	if err := cmd.Run(); err != nil {

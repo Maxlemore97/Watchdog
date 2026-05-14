@@ -2,8 +2,14 @@ name: ci
 
 on:
   push:
-    branches: [main, go-port]
+    branches: [main]
   pull_request:
+
+# Cancel in-flight runs when a new commit lands on the same ref so
+# we don't burn CI minutes on stale revisions.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   test:
