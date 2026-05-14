@@ -175,8 +175,11 @@ def _build_user_prompt(bundle: ArtifactBundle) -> str:
         # not be allowed to break out of the attribute value into the
         # prompt body.
         safe_path = html.escape(path, quote=True)
+        # Neutralize any literal `</UNTRUSTED` the file body could embed to
+        # close the framing tag and inject instructions before the closer.
+        safe_content = content.replace("</UNTRUSTED", "<\\/UNTRUSTED")
         parts.append(f'<UNTRUSTED kind="file" path="{safe_path}">')
-        parts.append(content)
+        parts.append(safe_content)
         parts.append("</UNTRUSTED>")
         parts.append("")
     parts.append('Return a single JSON object matching the schema. No prose.')
@@ -196,7 +199,6 @@ def _invoke_claude(prompt: str) -> str | None:
     cmd = [
         cli,
         "-p",
-        prompt,
         "--model",
         MODEL,
         "--output-format",
@@ -210,8 +212,10 @@ def _invoke_claude(prompt: str) -> str | None:
     if append_system:
         cmd += ["--append-system-prompt", SYSTEM_PROMPT]
     try:
+        # Pipe the prompt via stdin instead of argv so multi-KB bundles
+        # cannot run into ARG_MAX if the bundle cap is ever raised.
         proc = subprocess.run(
-            cmd, input=None, capture_output=True, text=True, timeout=CLI_TIMEOUT, env=env
+            cmd, input=prompt, capture_output=True, text=True, timeout=CLI_TIMEOUT, env=env
         )
     except (subprocess.TimeoutExpired, FileNotFoundError):
         return None

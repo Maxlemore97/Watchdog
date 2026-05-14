@@ -260,6 +260,23 @@ class FetchPluginGitHardeningTests(unittest.TestCase):
         self.assertIn("BatchMode=yes", env.get("GIT_SSH_COMMAND", ""))
         self.assertIn("--filter=blob:none", captured["cmd"])
 
+    def test_clone_argv_uses_dash_dash_separator(self):
+        # `--` before positional args defends against future Git versions
+        # parsing flag-shaped URLs/refs as options.
+        captured: dict = {}
+
+        def fake_run(cmd, **kw):
+            captured["cmd"] = cmd
+            raise subprocess.CalledProcessError(128, cmd)
+
+        with patch.object(fa.subprocess, "run", side_effect=fake_run):
+            fa.fetch_plugin_git("https://github.com/example/repo.git")
+
+        cmd = captured["cmd"]
+        self.assertIn("--", cmd)
+        dd_idx = cmd.index("--")
+        self.assertEqual(cmd[dd_idx + 1], "https://github.com/example/repo.git")
+
 
 class FetchPluginLocalSymlinkTests(unittest.TestCase):
     """S3: hostile plugin can ship symlinks pointing outside the plugin

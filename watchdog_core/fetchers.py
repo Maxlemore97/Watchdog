@@ -502,7 +502,7 @@ def fetch_plugin_git(git_url: str, ref: str | None = None) -> ArtifactBundle | N
         cmd = ["git", "clone", "--depth=1", "--filter=blob:none"]
         if ref:
             cmd += ["--branch", ref]
-        cmd += [git_url, str(tmp)]
+        cmd += ["--", git_url, str(tmp)]
         try:
             subprocess.run(
                 cmd,
@@ -572,8 +572,8 @@ def fetch_plugin_local(name: str, path: str) -> ArtifactBundle | None:
             files[str(rel)] = content
 
     for candidate in ("plugin.json", ".claude-plugin/plugin.json"):
-        path = root / candidate
-        if path.is_symlink() or not path.is_file():
+        candidate_path = root / candidate
+        if candidate_path.is_symlink() or not candidate_path.is_file():
             continue
         content = _read_member(root, Path(candidate))
         if content is not None:

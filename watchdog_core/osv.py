@@ -27,7 +27,7 @@ CACHE_DIR = cache_dir()
 CACHE_TTL_SECONDS = int(os.environ.get("WATCHDOG_CACHE_TTL", "3600"))
 
 SEVERITY_RANK = {"none": 0, "low": 1, "medium": 2, "high": 3, "critical": 4}
-UNKNOWN_SEVERITY_RANK = SEVERITY_RANK["medium"]
+UNKNOWN_SEVERITY_RANK = SEVERITY_RANK["high"]
 MIN_SEVERITY = os.environ.get("WATCHDOG_MIN_SEVERITY", "low").strip().lower()
 if MIN_SEVERITY not in SEVERITY_RANK:
     MIN_SEVERITY = "low"

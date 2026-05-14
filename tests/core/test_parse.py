@@ -354,5 +354,27 @@ class ParallelResolveTests(unittest.TestCase):
         self.assertEqual(seen, ["onlyone"])
 
 
+class MalformedShellTests(unittest.TestCase):
+    """A malformed shell command (e.g. unbalanced quote) must produce a
+    note so the adapter degrades to `ask`. Silent fallthrough would let
+    a tampered install bypass the scanner entirely."""
+
+    def test_unbalanced_quote_produces_note(self):
+        pkgs, notes = parse_install('npm install "broken')
+        self.assertEqual(pkgs, [])
+        self.assertTrue(notes)
+        self.assertTrue(
+            any("malformed" in n.lower() for n in notes),
+            f"expected 'malformed' in notes, got {notes!r}",
+        )
+
+    def test_non_install_command_stays_silent(self):
+        # Sanity: well-formed but non-install commands must NOT produce
+        # a note (otherwise every ls/cd would force `ask`).
+        pkgs, notes = parse_install("ls -la /tmp")
+        self.assertEqual(pkgs, [])
+        self.assertEqual(notes, [])
+
+
 if __name__ == "__main__":
     unittest.main()

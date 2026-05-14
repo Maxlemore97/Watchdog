@@ -126,8 +126,11 @@ def parse_install(command: str) -> tuple[list[Package], list[str]]:
     """
     try:
         tokens = shlex.split(command.strip(), posix=True)
-    except ValueError:
-        return [], []
+    except ValueError as exc:
+        # Malformed shell (e.g. unbalanced quote) must not silently degrade
+        # to "no install detected" -> allow. Emit a note so the adapter
+        # surfaces an `ask` verdict.
+        return [], [f"malformed shell command: {exc}"]
     if len(tokens) < 3:
         return [], []
 
