@@ -4,13 +4,13 @@
 
 **Pre-install security review for AI-mediated package and plugin installs.**
 
-Single static binary. No Python. Works on Linux, macOS, and Windows.
+Single static binary. No Python. Linux, macOS, Windows.
 
 Host-agnostic. Catches installs from Claude Code, Cursor, Continue, Zed, OpenCode, Aider, Cline, plain shells driven by an agent — anywhere code gets installed on your behalf.
 
 [![Go 1.25+](https://img.shields.io/badge/go-1.25%2B-blue.svg)](https://go.dev/)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
-[![Tests](https://img.shields.io/badge/tests-162%20passing-brightgreen.svg)](#testing)
+[![Tests passing](https://img.shields.io/badge/tests-passing-brightgreen.svg)](#testing)
 [![Zero runtime deps](https://img.shields.io/badge/runtime%20deps-mcp--go%20only-lightgrey.svg)](#engine)
 
 </div>
@@ -32,33 +32,127 @@ Verdict: `allow`, `ask`, or `deny`. Worst across packages wins. Fail-closed defa
 
 ---
 
-## Install
+## Quick start
+
+Three commands, end to end:
 
 ```bash
-# Linux / macOS
+# 1. Install the binaries.
 curl -fsSL https://raw.githubusercontent.com/Maxlemore97/Watchdog/main/install.sh | sh
 
-# Windows (PowerShell)
-iwr -useb https://raw.githubusercontent.com/Maxlemore97/Watchdog/main/install.ps1 | iex
-
-# Or with go install
-go install github.com/Maxlemore97/watchdog/cmd/...@latest
-
-# Or grab a tarball from the GitHub Releases page and put the
-# binaries on your PATH manually.
-```
-
-The installer drops eight binaries into `~/.local/bin` (Linux/macOS) or `%USERPROFILE%\.watchdog\bin` (Windows). After install, two more steps:
-
-```bash
-# 1. Install package-manager shims (intercepts every npm/pip/cargo/... install)
+# 2. Add the install dir to PATH (if the installer warned about it),
+#    then install the package-manager shims.
+export PATH="$HOME/.local/bin:$PATH"
 watchdog-shim install
 
-# 2. Verify
+# 3. Put the shim dir at the FRONT of your PATH (printed by step 2),
+#    open a new shell, then verify.
+export PATH="$HOME/.watchdog/bin:$PATH"
 watchdog-shim doctor
 ```
 
-`watchdog-shim install` writes wrapper scripts into `~/.watchdog/bin/` and prints the PATH line to add. Put the shim dir **first** on your PATH so installs hit the wrapper before the real binary.
+Expected `doctor` output when set up correctly:
+
+```
+watchdog-shim doctor:
+  ok  shim dir is first on PATH
+  ok  watchdog-shim-exec found on PATH
+  ok  at least one LLM provider CLI on PATH
+  ok  cache dir writable (/home/you/.cache/watchdog)
+```
+
+`warn no LLM provider CLI` is fine — Watchdog falls back to OSV-only checks. Install one of `claude`, `gemini`, `openai`, or `ollama` to enable LLM source review (see [LLM providers](#llm-providers)).
+
+---
+
+## Install
+
+Pick one of:
+
+### A. Install script (Linux / macOS)
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/Maxlemore97/Watchdog/main/install.sh | sh
+```
+
+Downloads the latest release for your OS+arch, verifies its SHA-256 against the published `checksums.txt`, and drops eight binaries into `~/.local/bin` (override via `WATCHDOG_INSTALL_DIR`). Pin a version with `WATCHDOG_VERSION=v0.4.0 sh install.sh`.
+
+### B. Install script (Windows PowerShell)
+
+```powershell
+iwr -useb https://raw.githubusercontent.com/Maxlemore97/Watchdog/main/install.ps1 | iex
+```
+
+Drops binaries into `%USERPROFILE%\.watchdog\bin`. The script prints a one-liner that adds the dir to your user PATH; copy-paste it and restart your shell.
+
+### C. `go install`
+
+If you have Go 1.25+:
+
+```bash
+go install github.com/Maxlemore97/watchdog/cmd/...@latest
+```
+
+Builds and installs all eight binaries under `$(go env GOPATH)/bin`. Ensure that dir is on your PATH.
+
+### D. Release tarball (air-gapped / locked-down environments)
+
+Grab the tarball or zip for your platform from [Releases](https://github.com/Maxlemore97/Watchdog/releases), verify `checksums.txt`, extract, and copy the binaries anywhere on your PATH.
+
+---
+
+## Set up the package-manager shims
+
+The shims are PATH-prepend wrappers that intercept every `npm`, `pip`, `cargo`, `gem`, `composer`, `pnpm`, `yarn`, `pip3`, `uv`, and `poetry` invocation. Without them, Watchdog only fires inside Claude Code or MCP-aware hosts.
+
+```bash
+watchdog-shim install
+```
+
+Writes ten wrapper scripts into `~/.watchdog/bin/` (Linux/macOS) or `%USERPROFILE%\.watchdog\bin` (Windows). The command prints the exact PATH line to add. **The shim dir must be FIRST on your PATH** — otherwise installs resolve to the real binary directly and bypass scanning.
+
+Linux / macOS, bash or zsh:
+
+```bash
+echo 'export PATH="$HOME/.watchdog/bin:$PATH"' >> ~/.bashrc   # or ~/.zshrc
+exec $SHELL -l
+```
+
+Windows PowerShell (persistent, user-scoped):
+
+```powershell
+[Environment]::SetEnvironmentVariable(
+  'Path', "$env:USERPROFILE\.watchdog\bin;" + [Environment]::GetEnvironmentVariable('Path','User'), 'User')
+```
+
+Verify:
+
+```bash
+watchdog-shim doctor
+watchdog-shim status   # per-tool install state
+```
+
+To remove the shims later: `watchdog-shim uninstall` (only deletes scripts carrying the `Watchdog shim` marker — your own binaries are safe).
+
+---
+
+## LLM providers
+
+Optional but recommended. Watchdog shells out to whichever local LLM CLI you have installed. Auto-detect order: `claude → gemini → openai → ollama`. Pin one with `WATCHDOG_LLM_PROVIDER`.
+
+| Provider | CLI binary | Default model                | Install hint                                                   |
+|----------|------------|------------------------------|----------------------------------------------------------------|
+| Claude   | `claude`   | `claude-haiku-4-5-20251001`  | [Claude Code](https://claude.com/claude-code)                  |
+| Gemini   | `gemini`   | `gemini-2.5-flash`           | `npm install -g @google/gemini-cli`                            |
+| OpenAI   | `openai`   | `gpt-4.1-mini`               | `pip install openai`                                           |
+| Ollama   | `ollama`   | `llama3.1`                   | [ollama.com](https://ollama.com)                               |
+| Generic  | `WATCHDOG_LLM_CMD` | user-specified     | Any CLI that reads a prompt on stdin and writes JSON on stdout |
+
+Verdict cache keys include `(provider, model)`, so switching CLIs invalidates prior verdicts — a weaker model cannot whitewash a verdict cached by a stronger one.
+
+The analyzer only accepts a verdict that is either the model's entire trimmed output as one JSON object, or wrapped in a fenced ```` ```json ```` block. Prose-embedded JSON is ignored — a hostile artifact echoed back by the model cannot smuggle a forged verdict object. Unparseable output falls through to `ask`.
+
+No CLI installed? Watchdog still runs OSV.dev CVE checks; only the LLM source review is skipped.
 
 ---
 
@@ -103,13 +197,18 @@ All four adapters share `~/.cache/watchdog/`, so a plugin vetted by one is recog
 
 ## Claude Code plugin
 
-The Claude Code plugin is shipped in this repo. Install it once and the three hooks fire automatically (PreToolUse on Bash, UserPromptSubmit, SessionStart):
+This repository ships a Claude Code plugin (`.claude-plugin/plugin.json` + hook scripts under `hooks/`) that registers three hooks: `PreToolUse` on Bash, `UserPromptSubmit`, and `SessionStart`.
+
+In a Claude Code session:
 
 ```
-/plugin install <this-repo>
+/plugin marketplace add Maxlemore97/Watchdog
+/plugin install watchdog@watchdog-marketplace
 ```
 
-The plugin's hook scripts shell out to the `watchdog-pretool` / `watchdog-session` / `watchdog-prompt` binaries on your PATH. If the binaries are missing the hook scripts exit silently rather than overriding other plugins' decisions — install Watchdog first, then the plugin.
+The first line registers this repo as a plugin marketplace; the second installs the `watchdog` plugin from it. The hook scripts (`hooks/pretool.sh` etc.) shell out to the `watchdog-pretool` / `watchdog-session` / `watchdog-prompt` binaries on your PATH — **install the binaries first** (see [Install](#install)). If the binaries are missing, the hook scripts exit silently rather than overriding other plugins' decisions.
+
+Confirm the plugin is wired up: in Claude Code run `/plugin` and look for `watchdog` in the installed list. New Bash installs (`npm install …`) now trigger the PreToolUse check; a deny shows up in the Claude UI as a blocked tool call.
 
 ---
 
@@ -136,20 +235,32 @@ Configure in your MCP client (Cursor, Continue, Claude Desktop, …):
 }
 ```
 
+`watchdog-mcp` must be on the host process's PATH. Absolute path also works: `"command": "/home/you/.local/bin/watchdog-mcp"`.
+
 ---
 
 ## GitHub Action
 
-For repos that publish Claude Code plugins or skills, the GitHub Action runs `analyze_local_plugin` on every modified plugin root on PR. Annotations land as file-level comments; the job exits non-zero when any plugin is denied (configurable via `WATCHDOG_ACTION_FAIL_ON`).
-
-Workflow snippet:
+For repos that publish Claude Code plugins or skills, the Action runs `analyze_local_plugin` on every modified plugin root on PR. Annotations land as file-level comments; the job exits non-zero when any plugin is denied (configurable via `fail-on`).
 
 ```yaml
-- uses: Maxlemore97/Watchdog@v1  # via install.sh in a setup step
-- run: watchdog-action
-  env:
-    WATCHDOG_ACTION_FAIL_ON: deny
+name: Watchdog
+on: [pull_request]
+permissions:
+  contents: read
+  pull-requests: write
+jobs:
+  watchdog:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with: { fetch-depth: 0 }
+      - uses: Maxlemore97/Watchdog@v1
+        with:
+          fail-on: deny     # deny | ask | never
 ```
+
+Inputs: `fail-on` (default `deny`), `model` (override default LLM), `base-ref` (auto-detected), `version` (pin a Watchdog release).
 
 ---
 
@@ -173,26 +284,31 @@ All knobs are env vars. Sensible defaults; nothing required.
 | `WATCHDOG_HOOK_BUDGET_SECS`     | `30`               | Wall-clock cap per hook invocation                            |
 | `WATCHDOG_SESSION_MAX_SCANS`    | `10`               | Max plugins re-analyzed per SessionStart                      |
 | `WATCHDOG_ACTION_FAIL_ON`       | `deny`             | `deny` / `ask` / `never` for GitHub Action exit code          |
+| `WATCHDOG_OSV_ENDPOINT`         | OSV.dev            | Override (http/https only — `file://` rejected)               |
 | `WATCHDOG_LOG`                  | —                  | If set, JSON-line event log path                              |
 | `WATCHDOG_DISABLE`              | —                  | Set to `1` in nested LLM child env to break hook recursion    |
 
 ---
 
-## LLM providers
+## Troubleshooting
 
-Watchdog shells out to whichever local CLI you have installed. Auto-detect order is `claude → gemini → openai → ollama`. Pin with `WATCHDOG_LLM_PROVIDER`.
+**`watchdog-shim doctor` says shim dir not first on PATH.**
+You appended instead of prepended. Re-export with the shim dir on the **left** of `$PATH`, restart the shell.
 
-| Provider | CLI binary | Default model                          |
-|----------|------------|----------------------------------------|
-| Claude   | `claude`   | `claude-haiku-4-5-20251001`            |
-| Gemini   | `gemini`   | `gemini-2.5-flash`                     |
-| OpenAI   | `openai`   | `gpt-4.1-mini`                         |
-| Ollama   | `ollama`   | `llama3.1`                             |
-| Generic  | `WATCHDOG_LLM_CMD` | user-specified, stdin-piped     |
+**`watchdog-shim-exec: real binary "npm" not found on PATH`.**
+The shim dir is on PATH but no other entry contains `npm`. Install Node/npm via your usual route; the shim will pick it up next call.
 
-Verdict cache keys include `(provider, model)`, so switching CLIs invalidates prior verdicts — a weaker model cannot whitewash a verdict cached by a stronger one.
+**Claude Code hook fires but verdict says "watchdog: plugin install detected but analyzer unavailable".**
+No LLM CLI on PATH. Install one (see [LLM providers](#llm-providers)) or set `WATCHDOG_MODE=osv` to skip the LLM stage.
 
-The analyzer only accepts a verdict that is either the model's entire trimmed output as one JSON object, or wrapped in a fenced ```` ```json ```` block. Prose-embedded JSON is ignored — a hostile artifact that the model quotes back in its response cannot smuggle a forged verdict object. Unparseable output falls through to `ask`.
+**`go install` reports `package github.com/.../cmd/...: cannot find package`.**
+Run `go version`. Need 1.25+. Older Go cannot resolve the wildcard form; install binaries individually (`go install github.com/Maxlemore97/watchdog/cmd/watchdog-pretool@latest`) or use the install script.
+
+**Hook says "scan budget exceeded".**
+Raise `WATCHDOG_HOOK_BUDGET_SECS` (default 30) or `WATCHDOG_MAX_PACKAGES` (default 50). Large monorepo `npm install` from lockfile can produce >50 packages.
+
+**Want to bypass once.**
+`WATCHDOG_DISABLE=1 npm install something`. Watchdog short-circuits to a pass-through.
 
 ---
 
@@ -238,6 +354,8 @@ internal/
   preflight/  shared OSV+LLM aggregator
   shim/       wrapper templates, FindRealBinary
   ghaction/   workflow command emitter, path classifiers
+  urlenc/     shared URL-path escaper
+  config/     env validation + Disabled() helper
 hooks/        Claude Code hook shell scripts (POSIX)
 ```
 
@@ -260,13 +378,11 @@ go test -race ./...
 
 ## Testing
 
-162 Go test cases. Race-clean. No network.
+Race-clean. No network. Adversarial-archive corpus + prompt-injection cases for the analyzer.
 
 ```bash
 go test -race ./...
 ```
-
-End-to-end smoke verified locally: `npm install lodash` through the `watchdog-pretool` binary returns a real OSV deny with GHSA identifiers; `watchdog-shim install` writes 10 wrappers, status correct, marker baked.
 
 ---
 
