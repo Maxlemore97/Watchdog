@@ -215,12 +215,16 @@ def collect_packages(
     `resolve_version_fn` defaults to `watchdog_core.osv.resolve_version`
     (late-imported to avoid import cycles). Tests can pass `lambda p: p`
     for a pure-parsing run without network calls.
+
+    Version resolution for multiple packages runs in parallel via a
+    thread pool so a 5-package install does not stack 5 sequential
+    registry latencies onto the user.
     """
     if resolve_version_fn is None:
         from .osv import resolve_version as _rv
         resolve_version_fn = _rv
 
-    pkgs: list[Package] = []
+    raw_pkgs: list[Package] = []
     notes: list[str] = []
     seen: set[str] = set()
 
@@ -235,14 +239,23 @@ def collect_packages(
                 continue
             seen.add(seg)
             seg_pkgs, seg_notes = parse_install(seg)
-            for raw_pkg in seg_pkgs:
-                pkgs.append(resolve_version_fn(raw_pkg))
+            raw_pkgs.extend(seg_pkgs)
             notes.extend(seg_notes)
             for inner in _extract_subshells(seg):
                 _walk(inner, depth + 1)
 
     _walk(command, 0)
-    return pkgs, notes
+
+    if not raw_pkgs:
+        return [], notes
+    if len(raw_pkgs) == 1:
+        return [resolve_version_fn(raw_pkgs[0])], notes
+
+    from concurrent.futures import ThreadPoolExecutor
+    workers = min(len(raw_pkgs), 8)
+    with ThreadPoolExecutor(max_workers=workers) as ex:
+        resolved = list(ex.map(resolve_version_fn, raw_pkgs))
+    return resolved, notes
 
 
 # ---------- plugin-prompt parser ------------------------------------------

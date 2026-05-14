@@ -21,15 +21,11 @@ import time
 from pathlib import Path
 
 from .fetchers import fetch, fetch_plugin_local
+from .log import log_event
+from .paths import cache_dir
 from .types import ArtifactBundle
 
-CACHE_DIR = Path(
-    os.environ.get("WATCHDOG_CACHE_DIR")
-    or os.path.join(
-        os.environ.get("XDG_CACHE_HOME") or os.path.expanduser("~/.cache"),
-        "watchdog",
-    )
-)
+CACHE_DIR = cache_dir()
 CACHE_TTL_SECONDS = int(os.environ.get("WATCHDOG_CLAUDE_CACHE_TTL", "86400"))
 
 MODEL = os.environ.get("WATCHDOG_MODEL", "claude-haiku-4-5-20251001")
@@ -112,6 +108,14 @@ def _prefilter(bundle: ArtifactBundle) -> dict | None:
                     matched_label = label
     if not hits:
         return None
+    log_event(
+        "prefilter_deny",
+        ecosystem=bundle.ecosystem,
+        name=bundle.name,
+        version=bundle.version,
+        reason=matched_label,
+        hit_count=len(hits),
+    )
     return {
         "verdict": "deny",
         "risk": "critical",

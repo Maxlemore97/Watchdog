@@ -314,5 +314,53 @@ class SplitNameVersionTests(unittest.TestCase):
         self.assertEqual(split_name_version("foo/bar:^1.0", "composer"), ("foo/bar", "^1.0"))
 
 
+class ParallelResolveTests(unittest.TestCase):
+    """A8: collect_packages must run version resolution concurrently
+    so multi-package installs don't stack registry latencies."""
+
+    def test_calls_resolver_per_package(self):
+        seen: list[str] = []
+
+        def fake_resolve(p):
+            seen.append(p.name)
+            return p
+
+        pkgs, _ = _collect_packages(
+            "npm install a b c d",
+            resolve_version_fn=fake_resolve,
+        )
+        self.assertEqual(sorted(p.name for p in pkgs), ["a", "b", "c", "d"])
+        self.assertEqual(sorted(seen), ["a", "b", "c", "d"])
+
+    def test_parallel_faster_than_serial(self):
+        import time as _time
+
+        def slow(p):
+            _time.sleep(0.05)
+            return p
+
+        cmd = "pip install a b c d e f"  # 6 packages × 50ms = 300ms serial
+        start = _time.monotonic()
+        pkgs, _ = _collect_packages(cmd, resolve_version_fn=slow)
+        elapsed = _time.monotonic() - start
+        self.assertEqual(len(pkgs), 6)
+        # Parallel with 8 workers should finish well under 300ms.
+        self.assertLess(elapsed, 0.20)
+
+    def test_single_package_does_not_use_pool(self):
+        seen: list[str] = []
+
+        def fake_resolve(p):
+            seen.append(p.name)
+            return p
+
+        pkgs, _ = _collect_packages(
+            "npm install onlyone",
+            resolve_version_fn=fake_resolve,
+        )
+        self.assertEqual([p.name for p in pkgs], ["onlyone"])
+        self.assertEqual(seen, ["onlyone"])
+
+
 if __name__ == "__main__":
     unittest.main()

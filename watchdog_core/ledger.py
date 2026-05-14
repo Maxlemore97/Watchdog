@@ -13,15 +13,9 @@ import os
 import time
 from pathlib import Path
 
-from .analyzer import analyze_local_plugin
+from .paths import cache_dir
 
-CACHE_DIR = Path(
-    os.environ.get("WATCHDOG_CACHE_DIR")
-    or os.path.join(
-        os.environ.get("XDG_CACHE_HOME") or os.path.expanduser("~/.cache"),
-        "watchdog",
-    )
-)
+CACHE_DIR = cache_dir()
 LEDGER_PATH = CACHE_DIR / "vetted_plugins.json"
 LEDGER_VERSION = 1
 
@@ -146,13 +140,19 @@ def discover_plugins(roots: list[Path] | None = None) -> list[tuple[str, Path, d
 def scan_plugins(
     plugins: list[tuple[str, Path, dict]],
     ledger: dict,
-    analyzer=analyze_local_plugin,
+    analyzer=None,
     max_scans: int | None = None,
 ) -> tuple[list[tuple[str, dict]], bool, int]:
     """Run analyzer on plugins whose hash is new/changed.
 
     Returns (findings, ledger_dirty, skipped_due_to_cap).
+
+    `analyzer` defaults to `watchdog_core.analyzer.analyze_local_plugin`,
+    imported lazily so callers that only need the ledger (or pass their
+    own analyzer) avoid dragging in the LLM analyzer + fetchers.
     """
+    if analyzer is None:
+        from .analyzer import analyze_local_plugin as analyzer
     if max_scans is None:
         max_scans = MAX_SCANS_PER_SESSION
     entries = ledger.setdefault("entries", {})

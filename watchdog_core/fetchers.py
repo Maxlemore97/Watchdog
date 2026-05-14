@@ -92,6 +92,63 @@ def _read_member(extract_dir: Path, rel: Path) -> str | None:
         return None
 
 
+def _open_archive(raw: bytes, kind: str):
+    """Open an in-memory archive. `kind` is one of:
+    - "tar.gz"    gzip-compressed tar (npm, crates, gem inner)
+    - "tar"       uncompressed tar (gem outer)
+    - "tar.any"   any tar variant (PyPI sdist that may be .tar.* or .tar)
+    - "zip"       zip archive (Packagist, PyPI .zip sdist)
+    """
+    if kind == "zip":
+        return zipfile.ZipFile(io.BytesIO(raw))
+    if kind == "tar":
+        return tarfile.open(fileobj=io.BytesIO(raw), mode="r:")
+    if kind == "tar.any":
+        return tarfile.open(fileobj=io.BytesIO(raw), mode="r:*")
+    return tarfile.open(fileobj=io.BytesIO(raw), mode="r:gz")
+
+
+def _extract_tar(
+    tf, predicate, key_fn=lambda m, parts: "/".join(parts),
+) -> dict[str, str]:
+    """Walk a tar archive, keeping members for which `predicate(member, parts)`
+    is True. `parts` is the cleaned member path tuple (leading "package/"
+    stripped for npm). Returns {key: decoded-content}."""
+    files: dict[str, str] = {}
+    for member in tf.getmembers():
+        if not member.isfile():
+            continue
+        rel = Path(member.name)
+        parts = (
+            rel.parts[1:] if rel.parts and rel.parts[0] == "package" else rel.parts
+        )
+        if not parts:
+            continue
+        if not predicate(member, parts):
+            continue
+        try:
+            fh = tf.extractfile(member)
+            if not fh:
+                continue
+            content = fh.read(MAX_FILE_BYTES * 2).decode("utf-8", errors="replace")
+        except (OSError, KeyError, UnicodeDecodeError):
+            continue
+        files[key_fn(member, parts)] = content
+    return files
+
+
+def _extract_zip(zf, predicate) -> dict[str, str]:
+    files: dict[str, str] = {}
+    for member in zf.namelist():
+        if not predicate(member):
+            continue
+        try:
+            files[member] = zf.read(member).decode("utf-8", errors="replace")
+        except (KeyError, UnicodeDecodeError):
+            continue
+    return files
+
+
 def _fit_bundle(files: dict[str, str]) -> dict[str, str]:
     fit: dict[str, str] = {}
     used = 0
@@ -130,25 +187,11 @@ def fetch_npm(name: str, version: str | None) -> ArtifactBundle | None:
         raw = _http_get(tarball_url)
         if raw:
             try:
-                with tarfile.open(fileobj=io.BytesIO(raw), mode="r:gz") as tf:
-                    for member in tf.getmembers():
-                        if not member.isfile():
-                            continue
-                        rel = Path(member.name)
-                        parts = rel.parts[1:] if rel.parts and rel.parts[0] == "package" else rel.parts
-                        if not parts:
-                            continue
-                        leaf = parts[-1].lower()
-                        if leaf not in NPM_INTERESTING_NAMES:
-                            continue
-                        try:
-                            fh = tf.extractfile(member)
-                            if not fh:
-                                continue
-                            content = fh.read(MAX_FILE_BYTES * 2).decode("utf-8", errors="replace")
-                        except (OSError, KeyError):
-                            continue
-                        files["/".join(parts)] = content
+                with _open_archive(raw, "tar.gz") as tf:
+                    files.update(_extract_tar(
+                        tf,
+                        lambda m, parts: parts[-1].lower() in NPM_INTERESTING_NAMES,
+                    ))
             except (tarfile.TarError, EOFError) as exc:
                 notes.append(f"tarball read failed: {exc}")
         else:
@@ -193,24 +236,18 @@ def fetch_pypi(name: str, version: str | None) -> ArtifactBundle | None:
         if raw:
             try:
                 if sdist_url.endswith(".zip"):
-                    with zipfile.ZipFile(io.BytesIO(raw)) as zf:
-                        for member in zf.namelist():
-                            leaf = member.rsplit("/", 1)[-1].lower()
-                            if leaf in PYPI_INTERESTING_NAMES:
-                                try:
-                                    files[member] = zf.read(member).decode("utf-8", errors="replace")
-                                except (KeyError, UnicodeDecodeError):
-                                    continue
+                    with _open_archive(raw, "zip") as zf:
+                        files.update(_extract_zip(
+                            zf,
+                            lambda m: m.rsplit("/", 1)[-1].lower() in PYPI_INTERESTING_NAMES,
+                        ))
                 else:
-                    with tarfile.open(fileobj=io.BytesIO(raw), mode="r:*") as tf:
-                        for member in tf.getmembers():
-                            if not member.isfile():
-                                continue
-                            leaf = Path(member.name).name.lower()
-                            if leaf in PYPI_INTERESTING_NAMES:
-                                fh = tf.extractfile(member)
-                                if fh:
-                                    files[member.name] = fh.read(MAX_FILE_BYTES * 2).decode("utf-8", errors="replace")
+                    with _open_archive(raw, "tar.any") as tf:
+                        files.update(_extract_tar(
+                            tf,
+                            lambda m, parts: parts[-1].lower() in PYPI_INTERESTING_NAMES,
+                            key_fn=lambda m, parts: m.name,
+                        ))
             except (tarfile.TarError, zipfile.BadZipFile, EOFError) as exc:
                 notes.append(f"sdist read failed: {exc}")
         else:
@@ -259,24 +296,16 @@ def fetch_crates(name: str, version: str | None) -> ArtifactBundle | None:
         dl_url = f"https://crates.io/api/v1/crates/{safe}/{urllib.parse.quote(chosen_version)}/download"
         raw = _http_get(dl_url)
         if raw:
+            def _crate_pred(m, parts):
+                leaf = parts[-1].lower()
+                is_src_entry = len(parts) >= 2 and parts[-2] == "src" and leaf in {"lib.rs", "main.rs"}
+                return leaf in CARGO_INTERESTING_NAMES or is_src_entry
+
             try:
-                with tarfile.open(fileobj=io.BytesIO(raw), mode="r:gz") as tf:
-                    for member in tf.getmembers():
-                        if not member.isfile():
-                            continue
-                        leaf = Path(member.name).name.lower()
-                        parts = Path(member.name).parts
-                        is_src_entry = len(parts) >= 2 and parts[-2] == "src" and leaf in {"lib.rs", "main.rs"}
-                        if leaf not in CARGO_INTERESTING_NAMES and not is_src_entry:
-                            continue
-                        fh = tf.extractfile(member)
-                        if not fh:
-                            continue
-                        try:
-                            content = fh.read(MAX_FILE_BYTES * 2).decode("utf-8", errors="replace")
-                        except UnicodeDecodeError:
-                            continue
-                        files[member.name] = content
+                with _open_archive(raw, "tar.gz") as tf:
+                    files.update(_extract_tar(
+                        tf, _crate_pred, key_fn=lambda m, parts: m.name,
+                    ))
             except (tarfile.TarError, EOFError) as exc:
                 notes.append(f"crate tarball read failed: {exc}")
         else:
@@ -315,13 +344,24 @@ def fetch_rubygems(name: str, version: str | None) -> ArtifactBundle | None:
     gem_url = f"https://rubygems.org/downloads/{safe}-{urllib.parse.quote(chosen_version)}.gem"
     raw = _http_get(gem_url)
     if raw:
+        def _gem_pred(m, parts):
+            leaf = parts[-1].lower()
+            is_ext = "/ext/" in ("/" + m.name) and leaf in GEM_INTERESTING_EXT_NAMES
+            is_lib_entry = m.name.endswith(f"lib/{name}.rb")
+            is_gemspec = leaf.endswith(".gemspec")
+            return (
+                leaf in GEM_INTERESTING_NAMES
+                or leaf in GEM_INTERESTING_EXT_NAMES
+                or is_ext
+                or is_lib_entry
+                or is_gemspec
+            )
+
         try:
-            with tarfile.open(fileobj=io.BytesIO(raw), mode="r:") as outer:
-                data_member = None
-                for m in outer.getmembers():
-                    if m.name == "data.tar.gz":
-                        data_member = m
-                        break
+            with _open_archive(raw, "tar") as outer:
+                data_member = next(
+                    (m for m in outer.getmembers() if m.name == "data.tar.gz"), None
+                )
                 if data_member is None:
                     notes.append("gem missing data.tar.gz")
                 else:
@@ -331,23 +371,11 @@ def fetch_rubygems(name: str, version: str | None) -> ArtifactBundle | None:
                     else:
                         inner_bytes = fh.read()
                         try:
-                            with tarfile.open(fileobj=io.BytesIO(inner_bytes), mode="r:gz") as inner:
-                                for member in inner.getmembers():
-                                    if not member.isfile():
-                                        continue
-                                    leaf = Path(member.name).name.lower()
-                                    is_ext = "/ext/" in ("/" + member.name) and leaf in GEM_INTERESTING_EXT_NAMES
-                                    is_lib_entry = member.name.endswith(f"lib/{name}.rb")
-                                    is_gemspec = leaf.endswith(".gemspec")
-                                    if not (leaf in GEM_INTERESTING_NAMES or leaf in GEM_INTERESTING_EXT_NAMES or is_ext or is_lib_entry or is_gemspec):
-                                        continue
-                                    fh2 = inner.extractfile(member)
-                                    if not fh2:
-                                        continue
-                                    try:
-                                        files[member.name] = fh2.read(MAX_FILE_BYTES * 2).decode("utf-8", errors="replace")
-                                    except UnicodeDecodeError:
-                                        continue
+                            with _open_archive(inner_bytes, "tar.gz") as inner:
+                                files.update(_extract_tar(
+                                    inner, _gem_pred,
+                                    key_fn=lambda m, parts: m.name,
+                                ))
                         except (tarfile.TarError, EOFError) as exc:
                             notes.append(f"inner gem tarball failed: {exc}")
         except (tarfile.TarError, EOFError) as exc:
@@ -413,14 +441,11 @@ def fetch_packagist(name: str, version: str | None) -> ArtifactBundle | None:
         raw = _http_get(dist_url)
         if raw:
             try:
-                with zipfile.ZipFile(io.BytesIO(raw)) as zf:
-                    for member in zf.namelist():
-                        leaf = member.rsplit("/", 1)[-1].lower()
-                        if leaf in COMPOSER_INTERESTING_NAMES:
-                            try:
-                                files[member] = zf.read(member).decode("utf-8", errors="replace")
-                            except (KeyError, UnicodeDecodeError):
-                                continue
+                with _open_archive(raw, "zip") as zf:
+                    files.update(_extract_zip(
+                        zf,
+                        lambda m: m.rsplit("/", 1)[-1].lower() in COMPOSER_INTERESTING_NAMES,
+                    ))
             except (zipfile.BadZipFile, EOFError) as exc:
                 notes.append(f"zip read failed: {exc}")
         else:

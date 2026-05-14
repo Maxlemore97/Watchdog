@@ -17,18 +17,13 @@ import urllib.request
 from pathlib import Path
 from typing import Iterable
 
+from .paths import cache_dir
 from .types import Package
 
 OSV_ENDPOINT = "https://api.osv.dev/v1/query"
 HTTP_TIMEOUT = 5.0
 
-CACHE_DIR = Path(
-    os.environ.get("WATCHDOG_CACHE_DIR")
-    or os.path.join(
-        os.environ.get("XDG_CACHE_HOME") or os.path.expanduser("~/.cache"),
-        "watchdog",
-    )
-)
+CACHE_DIR = cache_dir()
 CACHE_TTL_SECONDS = int(os.environ.get("WATCHDOG_CACHE_TTL", "3600"))
 
 SEVERITY_RANK = {"none": 0, "low": 1, "medium": 2, "high": 3, "critical": 4}

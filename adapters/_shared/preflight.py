@@ -20,6 +20,7 @@ from watchdog_core import (
     summarize,
     worst_verdict,
 )
+from watchdog_core.log import log_event
 from watchdog_core.osv import MIN_SEVERITY
 from watchdog_core.types import Package
 
@@ -159,6 +160,13 @@ def preflight_packages(
     reason = "; ".join(relevant[:5])
     if notes and worst == "allow":
         reason += f"; also: {'; '.join(notes)}"
+    log_event(
+        "preflight_packages",
+        mode=mode,
+        verdict=worst,
+        packages=[_pkg_label(p) for p in pkg_list],
+        reason=reason[:300],
+    )
     return {
         **base,
         "verdict": worst,
