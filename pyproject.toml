@@ -34,16 +34,22 @@ dev = ["pytest>=7"]
 Repository = "https://github.com/Maxlemore97/Watchdog"
 
 [project.scripts]
-watchdog-scan = "adapters.claude_code.entry.manual:main"
-watchdog-mcp  = "adapters.mcp_server.server:main"
+watchdog-scan      = "adapters.claude_code.entry.manual:main"
+watchdog-mcp       = "adapters.mcp_server.server:main"
+watchdog-shim      = "adapters.path_shim.cli:main"
+watchdog-shim-exec = "adapters.path_shim.shim:main"
+watchdog-action    = "adapters.github_action.entry:main"
 
 [tool.setuptools]
 packages = [
     "watchdog_core",
     "adapters",
+    "adapters._shared",
     "adapters.claude_code",
     "adapters.claude_code.entry",
+    "adapters.github_action",
     "adapters.mcp_server",
+    "adapters.path_shim",
 ]
 
 [tool.setuptools.package-data]

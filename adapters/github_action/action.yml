@@ -1,0 +1,46 @@
+name: Watchdog
+description: Audit Claude plugin/skill/command/hook changes in a pull request.
+author: Maxlemore97
+branding:
+  icon: shield
+  color: blue
+inputs:
+  fail-on:
+    description: "Verdict severity that fails the job: deny, ask, or never."
+    required: false
+    default: deny
+  model:
+    description: Claude model used by the analyzer.
+    required: false
+    default: claude-haiku-4-5-20251001
+  base-ref:
+    description: Base ref for the diff (default = pull_request base, else `main`).
+    required: false
+    default: ""
+  python-version:
+    description: Python interpreter used to run the analyzer.
+    required: false
+    default: "3.11"
+runs:
+  using: composite
+  steps:
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: ${{ inputs.python-version }}
+    - name: Install Watchdog
+      shell: bash
+      run: pip install --quiet watchdog-scanner
+    - name: Fetch base ref
+      shell: bash
+      run: |
+        base="${{ inputs.base-ref }}"
+        base="${base:-${GITHUB_BASE_REF:-main}}"
+        git fetch --no-tags --depth=50 origin "$base":"refs/remotes/origin/$base"
+    - name: Run Watchdog
+      shell: bash
+      env:
+        WATCHDOG_ACTION_FAIL_ON: ${{ inputs.fail-on }}
+        WATCHDOG_MODEL: ${{ inputs.model }}
+        WATCHDOG_BASE_REF: ${{ inputs.base-ref }}
+      run: watchdog-action

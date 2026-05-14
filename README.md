@@ -194,16 +194,100 @@ Exposed tools:
 The MCP adapter and the Claude Code adapter share the same `~/.cache/watchdog/`
 state, so plugins vetted via one are recognized by the other.
 
-### Planned adapters
+#### PATH shim — `adapters/path_shim/`
 
-- `adapters/path_shim/` — PATH-prepend wrapper for package-manager
-  binaries (`npm`, `pip`, `cargo`, ...). Agent- and host-agnostic;
-  covers installs from terminals and from agents that don't expose
-  hooks.
-- `adapters/pre_commit/`, `adapters/github_action/` — CI integrations
-  for blocking unsafe installs at commit/PR time.
+A set of small wrapper executables for package-manager binaries
+(`npm`, `pnpm`, `yarn`, `pip`, `pip3`, `uv`, `poetry`, `cargo`, `gem`,
+`composer`). When the shim directory is first on `PATH`, every install
+command goes through Watchdog before the real binary runs — regardless
+of which agent or shell launched it. Catches installs from terminal
+panes in Cursor, from Aider, Cline, or plain shells driven by an agent
+— anywhere the host does not expose a hook surface.
 
-All planned adapters reuse `watchdog_core` as-is, no engine changes.
+Install:
+
+```bash
+pip install watchdog-scanner
+watchdog-shim install
+# follow the printed instruction to prepend ~/.watchdog/bin to PATH
+```
+
+Manage:
+
+```bash
+watchdog-shim status      # which shims are installed
+watchdog-shim uninstall   # remove the wrappers
+```
+
+Behaviour:
+
+- Non-install invocations (`npm test`, `pip --version`, ...) are
+  detected and forwarded to the real binary unmodified — no preflight,
+  no extra latency beyond a single Python startup.
+- Install invocations run the same OSV + LLM preflight as the Claude
+  Code adapter. `allow` execs the real binary; `deny` exits non-zero;
+  `ask` prompts on a TTY or falls back to `WATCHDOG_OFFLINE_DECISION`
+  (defaults to `deny` for the shim — there is no host UI to surface
+  the question, so the safe default is stricter than the hook).
+- The real binary is located by absolute path so that the child
+  process cannot loop back into the shim even if `PATH` is unchanged.
+- POSIX-only in v1; Windows is out of scope.
+
+#### GitHub Action — `adapters/github_action/`
+
+A composite GitHub Action for repositories that ship Claude Code
+plugins or skills. On every pull request it diffs against the base
+ref, identifies changes to plugin assets
+
+- `**/.claude-plugin/**`
+- `**/skills/**/SKILL.md`
+- `**/commands/**.md`
+- `**/hooks/**`
+
+groups them by plugin root, and runs `analyze_local_plugin` on each.
+Verdicts surface as workflow annotations (`::error::` for `deny`,
+`::warning::` for `ask`, `::notice::` for `allow`) on the changed
+files, and the job exits non-zero based on the `fail-on` input
+(default `deny`).
+
+This is **not** a generic dependency scanner — Dependabot, Snyk,
+`npm audit` and `pip-audit` already own that surface. The GitHub
+Action exists to catch malicious skill / command / hook PRs whose
+payload lives in markdown bodies and which no normal SCA tool
+inspects.
+
+Usage:
+
+```yaml
+on:
+  pull_request:
+    paths:
+      - '**/.claude-plugin/**'
+      - '**/skills/**'
+      - '**/commands/**.md'
+      - '**/hooks/**'
+jobs:
+  watchdog:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with: { fetch-depth: 0 }
+      - uses: Maxlemore97/Watchdog/adapters/github_action@v0.4.0
+        with: { fail-on: deny }
+```
+
+See `adapters/github_action/README.md` for inputs and runner notes.
+
+### Watchdog scope
+
+Watchdog targets the **agent surface**: actions taken by an AI agent
+(installs it runs, plugins/skills/commands it ships). Generic
+supply-chain tools (npm audit, pip-audit, Snyk, Dependabot) already
+cover manifest edits in normal source repos, so Watchdog does not
+duplicate them. New adapters will only be considered if they fire on
+an agent-mediated action that no mainstream tool already inspects.
+
+All adapters reuse `watchdog_core` as-is — no engine changes.
 
 ## Using the engine directly
 

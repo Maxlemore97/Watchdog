@@ -2,9 +2,12 @@
 
 Adapters in `adapters/` use this package to implement host-specific hooks:
 - adapters/claude_code: Claude Code plugin (PreToolUse, UserPromptSubmit, SessionStart hooks)
-- adapters/mcp_server (planned): Model Context Protocol server, any MCP-aware agent
-- adapters/path_shim (planned): PATH-prepend wrapper for package-manager binaries
-- adapters/pre_commit / adapters/github_action (planned): CI integrations
+- adapters/mcp_server: Model Context Protocol server, any MCP-aware agent
+- adapters/path_shim: PATH-prepend wrapper for package-manager
+  binaries; catches installs from agents that don't expose hooks
+- adapters/github_action: PR-time scan of added/modified Claude
+  plugin/skill/command/hook files for repos that ship them (narrow,
+  not a generic dependency scanner)
 
 Public API:
 - parse_install / parse_packages / collect_packages: install-command parser
