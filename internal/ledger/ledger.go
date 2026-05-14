@@ -134,7 +134,9 @@ func Save(l Ledger) {
 		return
 	}
 	path := LedgerPath()
-	tmp := path + ".tmp"
+	// PID-suffixed tmp so parallel sessions writing the ledger don't
+	// tear each other's atomic-rename staging file.
+	tmp := path + "." + strconv.Itoa(os.Getpid()) + ".tmp"
 	if err := os.WriteFile(tmp, data, 0o644); err != nil {
 		return
 	}

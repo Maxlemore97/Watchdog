@@ -16,6 +16,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -28,17 +29,22 @@ import (
 	"github.com/Maxlemore97/watchdog/internal/types"
 )
 
-// escapeHTMLAttr mirrors Python's html.escape(s, quote=True). Go's
+// htmlAttrEscaper mirrors Python's html.escape(s, quote=True). Go's
 // stdlib html.EscapeString uses numeric entities (`&#34;`) where
 // Python emits named ones (`&quot;`, `&#x27;`); aligning matters
 // because the analyzer prompt and its tests pin the Python shape.
+// Single-pass via NewReplacer — was 5 sequential ReplaceAll
+// allocating new strings on each step.
+var htmlAttrEscaper = strings.NewReplacer(
+	"&", "&amp;",
+	"<", "&lt;",
+	">", "&gt;",
+	`"`, "&quot;",
+	"'", "&#x27;",
+)
+
 func escapeHTMLAttr(s string) string {
-	s = strings.ReplaceAll(s, "&", "&amp;")
-	s = strings.ReplaceAll(s, "<", "&lt;")
-	s = strings.ReplaceAll(s, ">", "&gt;")
-	s = strings.ReplaceAll(s, `"`, "&quot;")
-	s = strings.ReplaceAll(s, "'", "&#x27;")
-	return s
+	return htmlAttrEscaper.Replace(s)
 }
 
 func cacheTTLSeconds() int {
@@ -212,7 +218,11 @@ func cacheStore(key string, verdict map[string]any) {
 		return
 	}
 	path := filepath.Join(dir, key+".json")
-	tmp := path + ".tmp"
+	// PID-suffixed tmp so parallel watchdog processes scanning the
+	// same package don't write through each other's atomic rename
+	// staging file. Each PID owns its own tmp; Rename of the loser
+	// may still ENOENT but the cache content cannot be torn.
+	tmp := path + "." + strconv.Itoa(os.Getpid()) + ".tmp"
 	if err := os.WriteFile(tmp, data, 0o644); err != nil {
 		return
 	}
@@ -278,25 +288,16 @@ var (
 func candidateVerdictJSONs(text string) []string {
 	var out []string
 	for _, m := range jsonFenceRE.FindAllStringSubmatch(text, -1) {
-		if len(m) >= 2 && !contains(out, m[1]) {
+		if len(m) >= 2 && !slices.Contains(out, m[1]) {
 			out = append(out, m[1])
 		}
 	}
 	for _, m := range verdictObjectRE.FindAllString(text, -1) {
-		if !contains(out, m) {
+		if !slices.Contains(out, m) {
 			out = append(out, m)
 		}
 	}
 	return out
-}
-
-func contains(slice []string, s string) bool {
-	for _, x := range slice {
-		if x == s {
-			return true
-		}
-	}
-	return false
 }
 
 // extractVerdict pulls a strict-shape verdict object out of the LLM's

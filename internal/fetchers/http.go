@@ -9,6 +9,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -76,30 +77,7 @@ func truncateString(text string, limit int) string {
 	if len(text) <= limit {
 		return text
 	}
-	return text[:limit] + "\n... [truncated, total " + itoa(len(text)) + " bytes]"
-}
-
-func itoa(n int) string {
-	return strings.TrimLeft(stringifyInt(n), "0")
-}
-
-func stringifyInt(n int) string {
-	if n == 0 {
-		return "0"
-	}
-	neg := n < 0
-	if neg {
-		n = -n
-	}
-	digits := []byte{}
-	for n > 0 {
-		digits = append([]byte{byte('0' + n%10)}, digits...)
-		n /= 10
-	}
-	if neg {
-		digits = append([]byte{'-'}, digits...)
-	}
-	return string(digits)
+	return text[:limit] + "\n... [truncated, total " + strconv.Itoa(len(text)) + " bytes]"
 }
 
 // orderedFiles preserves insertion order so fitBundle iterates in a

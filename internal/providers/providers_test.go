@@ -1,3 +1,11 @@
+//go:build !windows
+
+// Provider tests use POSIX shell scripts as fake LLM CLIs (chmod +x,
+// /bin/sh shebang, cat/printf). On Windows exec.LookPath ignores
+// no-extension scripts and POSIX shell isn't available. The argv-
+// shape contracts the tests pin are identical on Windows builds; we
+// trust the build, not a re-test on the platform that can't run the
+// stubs cheaply.
 package providers
 
 import (

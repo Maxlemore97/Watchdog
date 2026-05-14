@@ -13,6 +13,7 @@ builds:
     env: [CGO_ENABLED=0]
     goos: [linux, darwin, windows]
     goarch: [amd64, arm64]
+    flags: ["-trimpath"]
     ldflags: ["-s -w -X main.Version={{.Version}}"]
   - id: watchdog-session
     main: ./cmd/watchdog-session
@@ -20,6 +21,7 @@ builds:
     env: [CGO_ENABLED=0]
     goos: [linux, darwin, windows]
     goarch: [amd64, arm64]
+    flags: ["-trimpath"]
     ldflags: ["-s -w -X main.Version={{.Version}}"]
   - id: watchdog-prompt
     main: ./cmd/watchdog-prompt
@@ -27,6 +29,7 @@ builds:
     env: [CGO_ENABLED=0]
     goos: [linux, darwin, windows]
     goarch: [amd64, arm64]
+    flags: ["-trimpath"]
     ldflags: ["-s -w -X main.Version={{.Version}}"]
   - id: watchdog-scan
     main: ./cmd/watchdog-scan
@@ -34,6 +37,7 @@ builds:
     env: [CGO_ENABLED=0]
     goos: [linux, darwin, windows]
     goarch: [amd64, arm64]
+    flags: ["-trimpath"]
     ldflags: ["-s -w -X main.Version={{.Version}}"]
   - id: watchdog-mcp
     main: ./cmd/watchdog-mcp
@@ -41,6 +45,7 @@ builds:
     env: [CGO_ENABLED=0]
     goos: [linux, darwin, windows]
     goarch: [amd64, arm64]
+    flags: ["-trimpath"]
     ldflags: ["-s -w -X main.Version={{.Version}}"]
   - id: watchdog-shim
     main: ./cmd/watchdog-shim
@@ -48,6 +53,7 @@ builds:
     env: [CGO_ENABLED=0]
     goos: [linux, darwin, windows]
     goarch: [amd64, arm64]
+    flags: ["-trimpath"]
     ldflags: ["-s -w -X main.Version={{.Version}}"]
   - id: watchdog-shim-exec
     main: ./cmd/watchdog-shim-exec
@@ -55,6 +61,7 @@ builds:
     env: [CGO_ENABLED=0]
     goos: [linux, darwin, windows]
     goarch: [amd64, arm64]
+    flags: ["-trimpath"]
     ldflags: ["-s -w -X main.Version={{.Version}}"]
   - id: watchdog-action
     main: ./cmd/watchdog-action
@@ -62,6 +69,7 @@ builds:
     env: [CGO_ENABLED=0]
     goos: [linux, darwin, windows]
     goarch: [amd64, arm64]
+    flags: ["-trimpath"]
     ldflags: ["-s -w -X main.Version={{.Version}}"]
 
 archives:

@@ -119,7 +119,9 @@ func CacheStore(pkg types.Package, vulns []map[string]any) {
 		return
 	}
 	path := cachePath(pkg)
-	tmp := path + ".tmp"
+	// PID-suffixed tmp so parallel processes can't tear each other's
+	// cache writes via a shared staging filename.
+	tmp := path + "." + strconv.Itoa(os.Getpid()) + ".tmp"
 	if err := os.WriteFile(tmp, data, 0o644); err != nil {
 		return
 	}

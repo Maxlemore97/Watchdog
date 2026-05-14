@@ -13,6 +13,7 @@ import (
 	"fmt"
 	"os"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -329,14 +330,7 @@ func labels(pkgs []types.Package) []string {
 }
 
 func joinSemi(parts []string) string {
-	out := ""
-	for i, p := range parts {
-		if i > 0 {
-			out += "; "
-		}
-		out += p
-	}
-	return out
+	return strings.Join(parts, "; ")
 }
 
 func truncate(s string, n int) string {

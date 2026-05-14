@@ -9,6 +9,9 @@
 //	watchdog_audit_plugin_local    audit an already-installed plugin dir
 //	watchdog_list_vetted_plugins   read the persistent ledger
 //	watchdog_osv_query             raw OSV.dev query (no LLM, no caching)
+//
+// Tool handler logic lives in internal/mcp/handlers.go so it can be
+// unit-tested without the SDK; this file is only SDK glue.
 package main
 
 import (
@@ -16,12 +19,7 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/Maxlemore97/watchdog/internal/analyzer"
-	"github.com/Maxlemore97/watchdog/internal/ledger"
-	"github.com/Maxlemore97/watchdog/internal/osv"
-	"github.com/Maxlemore97/watchdog/internal/parsers"
-	"github.com/Maxlemore97/watchdog/internal/preflight"
-	"github.com/Maxlemore97/watchdog/internal/types"
+	wmcp "github.com/Maxlemore97/watchdog/internal/mcp"
 
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
@@ -100,23 +98,18 @@ func main() {
 	}
 }
 
-// ---------- handlers ----------------------------------------------
+// ---------- SDK glue: argument extraction + Result marshaling -----
 
-func handlePreflightInstall(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+func handlePreflightInstall(_ context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	command, err := req.RequireString("command")
 	if err != nil {
 		return mcp.NewToolResultError(err.Error()), nil
 	}
 	mode := req.GetString("mode", "both")
-	pkgs, notes := parsers.CollectPackages(command, osv.ResolveVersion)
-	r := preflight.Packages(pkgs, notes, preflight.Options{
-		Mode:            mode,
-		OfflineDecision: "ask",
-	})
-	return mcp.NewToolResultJSON(r)
+	return mcp.NewToolResultJSON(wmcp.PreflightInstall(command, mode))
 }
 
-func handleScanPackage(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+func handleScanPackage(_ context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	ecosystem, err := req.RequireString("ecosystem")
 	if err != nil {
 		return mcp.NewToolResultError(err.Error()), nil
@@ -125,28 +118,18 @@ func handleScanPackage(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallT
 	if err != nil {
 		return mcp.NewToolResultError(err.Error()), nil
 	}
-	version := req.GetString("version", "")
-	v := analyzer.AnalyzePackage(ecosystem, name, version)
-	if v == nil {
-		v = map[string]any{"verdict": "ask", "reason": "no result"}
-	}
-	return mcp.NewToolResultJSON(v)
+	return mcp.NewToolResultJSON(wmcp.ScanPackage(ecosystem, name, req.GetString("version", "")))
 }
 
-func handleAuditPlugin(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+func handleAuditPlugin(_ context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	target, err := req.RequireString("target")
 	if err != nil {
 		return mcp.NewToolResultError(err.Error()), nil
 	}
-	ecosystem, name, version := parsers.ClassifyPluginTarget(target)
-	v := analyzer.AnalyzePackage(ecosystem, name, version)
-	if v == nil {
-		v = map[string]any{"verdict": "ask", "reason": "no result"}
-	}
-	return mcp.NewToolResultJSON(v)
+	return mcp.NewToolResultJSON(wmcp.AuditPlugin(target))
 }
 
-func handleAuditPluginLocal(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+func handleAuditPluginLocal(_ context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	name, err := req.RequireString("name")
 	if err != nil {
 		return mcp.NewToolResultError(err.Error()), nil
@@ -155,18 +138,14 @@ func handleAuditPluginLocal(ctx context.Context, req mcp.CallToolRequest) (*mcp.
 	if err != nil {
 		return mcp.NewToolResultError(err.Error()), nil
 	}
-	v := analyzer.AnalyzeLocalPlugin(name, path, "")
-	if v == nil {
-		v = map[string]any{"verdict": "ask", "reason": "no result"}
-	}
-	return mcp.NewToolResultJSON(v)
+	return mcp.NewToolResultJSON(wmcp.AuditPluginLocal(name, path))
 }
 
-func handleListVettedPlugins(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-	return mcp.NewToolResultJSON(ledger.Load())
+func handleListVettedPlugins(_ context.Context, _ mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	return mcp.NewToolResultJSON(wmcp.ListVettedPlugins())
 }
 
-func handleOSVQuery(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+func handleOSVQuery(_ context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	ecosystem, err := req.RequireString("ecosystem")
 	if err != nil {
 		return mcp.NewToolResultError(err.Error()), nil
@@ -175,20 +154,5 @@ func handleOSVQuery(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallTool
 	if err != nil {
 		return mcp.NewToolResultError(err.Error()), nil
 	}
-	version := req.GetString("version", "")
-	pkg := types.Package{Ecosystem: ecosystem, Name: name, Version: version}
-	vulns, queryErr := osv.Query(pkg)
-	if queryErr != nil {
-		return mcp.NewToolResultJSON(map[string]any{
-			"error":     queryErr.Error(),
-			"vulns":     []map[string]any{},
-			"filtered":  []map[string]any{},
-			"threshold": osv.MinSeverity(),
-		})
-	}
-	return mcp.NewToolResultJSON(map[string]any{
-		"vulns":     vulns,
-		"filtered":  osv.FilterBySeverity(vulns),
-		"threshold": osv.MinSeverity(),
-	})
+	return mcp.NewToolResultJSON(wmcp.OSVQuery(ecosystem, name, req.GetString("version", "")))
 }
