@@ -47,14 +47,24 @@ emit hook decision  →  allow | ask | deny  (+ reason for the user)
 
 ## Installation
 
-This is a Claude Code plugin. From a marketplace add it with:
+This is a Claude Code plugin. There are two install paths.
+
+**From GitHub** (once the repo is published):
 
 ```text
 /plugin marketplace add https://github.com/Maxlemore97/Watchdog
 /plugin install watchdog
 ```
 
-Or use the local source directly by pointing your Claude Code config at this repo.
+**From a local clone** (for development or before publishing):
+
+```text
+/plugin marketplace add /absolute/path/to/Watchdog
+/plugin install watchdog
+```
+
+Either path makes the SessionStart, PreToolUse, and UserPromptSubmit
+hooks active and registers the `/watchdog-scan` slash command.
 
 Requirements:
 - Python 3.10+

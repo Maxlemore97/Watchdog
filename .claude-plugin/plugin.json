@@ -7,7 +7,6 @@
     "email": "30655722+Maxlemore97@users.noreply.github.com",
     "url": "https://github.com/Maxlemore97"
   },
-  "commands": "./adapters/claude_code/commands",
   "hooks": {
     "PreToolUse": [
       {
