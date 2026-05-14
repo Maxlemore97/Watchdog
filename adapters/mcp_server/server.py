@@ -36,7 +36,7 @@ from watchdog_core import (
     load_ledger,
     query_osv,
 )
-from watchdog_core.osv import MIN_SEVERITY
+from watchdog_core.osv import min_severity
 from watchdog_core.types import Package
 
 
@@ -113,7 +113,7 @@ def osv_query(ecosystem: str, name: str, version: str | None = None) -> dict[str
     return {
         "vulns": vulns,
         "filtered": filter_by_severity(vulns),
-        "threshold": MIN_SEVERITY,
+        "threshold": min_severity(),
     }
 
 

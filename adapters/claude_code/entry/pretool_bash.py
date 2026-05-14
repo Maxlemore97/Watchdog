@@ -21,7 +21,7 @@ if str(_REPO_ROOT) not in sys.path:
 
 from adapters._shared.preflight import preflight_packages
 from watchdog_core import collect_packages, mascot
-from watchdog_core.osv import MIN_SEVERITY
+from watchdog_core.osv import min_severity
 
 VALID_MODES = {"osv", "claude", "both"}
 VALID_DECISIONS = {"allow", "deny", "ask"}
@@ -91,7 +91,7 @@ def main() -> int:
     ]
     mascot.show(
         mascot.EVENT_INTERCEPT,
-        ["Install command intercepted.", f"Mode: {mode}, threshold: {MIN_SEVERITY}", *pkg_labels, *notes],
+        ["Install command intercepted.", f"Mode: {mode}, threshold: {min_severity()}", *pkg_labels, *notes],
     )
     if pkg_labels:
         mascot.show(mascot.EVENT_PLUGIN_INFO, pkg_labels)

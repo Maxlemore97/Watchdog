@@ -25,8 +25,20 @@ from .paths import cache_dir
 from .providers import invoke_llm, resolve_provider, build_config
 from .types import ArtifactBundle
 
-CACHE_DIR = cache_dir()
-CACHE_TTL_SECONDS = int(os.environ.get("WATCHDOG_LLM_CACHE_TTL", "86400"))
+
+def cache_ttl_seconds() -> int:
+    try:
+        return int(os.environ.get("WATCHDOG_LLM_CACHE_TTL", "86400"))
+    except ValueError:
+        return 86400
+
+
+def __getattr__(name: str):
+    if name == "CACHE_DIR":
+        return cache_dir()
+    if name == "CACHE_TTL_SECONDS":
+        return cache_ttl_seconds()
+    raise AttributeError(f"module 'watchdog_core.analyzer' has no attribute {name!r}")
 
 SYSTEM_PROMPT = """You are a strict security analyzer for software packages and Claude Code plugins.
 You will receive metadata and a small set of files from a package or plugin the user is about to install or has just installed.
@@ -89,35 +101,72 @@ HOSTILE_PATTERNS: list[tuple[re.Pattern[str], str]] = [
 ]
 
 
+def _is_doc_path(path: str) -> bool:
+    """Heuristic: is this path a documentation file?
+
+    Doc files (README, .md, .rst, .txt) routinely document install
+    patterns like `curl … | bash` (Homebrew, rustup, nvm) and may carry
+    sample tokens or key-shaped strings. A pattern hit there should not
+    immediately deny — the user is reading docs, not executing them.
+    Code/script files keep the deny semantics.
+    """
+    leaf = path.rsplit("/", 1)[-1].lower()
+    if leaf.startswith("readme"):
+        return True
+    return leaf.endswith((".md", ".rst", ".txt"))
+
+
 def _prefilter(bundle: ArtifactBundle) -> dict | None:
     """Deterministic scan for highest-signal indicators. Returns a deny
-    verdict on first match; None otherwise. Runs before the LLM so a
-    jailbroken model cannot whitewash obviously hostile content."""
-    hits: list[str] = []
+    verdict on first match in code/script files, an ask verdict when the
+    only hits are in documentation files, or None when nothing matched.
+    Runs before the LLM so a jailbroken model cannot whitewash obviously
+    hostile content."""
+    code_hits: list[str] = []
+    doc_hits: list[str] = []
     matched_label: str | None = None
     for path, content in bundle.files.items():
         if not isinstance(content, str):
             continue
         for pattern, label in HOSTILE_PATTERNS:
             if pattern.search(content):
-                hits.append(f"{label} in {path}")
+                bucket = doc_hits if _is_doc_path(path) else code_hits
+                bucket.append(f"{label} in {path}")
                 if matched_label is None:
                     matched_label = label
-    if not hits:
+    if not code_hits and not doc_hits:
         return None
+    if code_hits:
+        log_event(
+            "prefilter_deny",
+            ecosystem=bundle.ecosystem,
+            name=bundle.name,
+            version=bundle.version,
+            reason=matched_label,
+            hit_count=len(code_hits) + len(doc_hits),
+        )
+        return {
+            "verdict": "deny",
+            "risk": "critical",
+            "reason": f"prefilter: {matched_label}",
+            "indicators": (code_hits + doc_hits)[:10],
+        }
+    # Doc-only hit: surface as ask. README install instructions and
+    # sample tokens commonly trigger these patterns without indicating
+    # malice.
     log_event(
-        "prefilter_deny",
+        "prefilter_ask",
         ecosystem=bundle.ecosystem,
         name=bundle.name,
         version=bundle.version,
         reason=matched_label,
-        hit_count=len(hits),
+        hit_count=len(doc_hits),
     )
     return {
-        "verdict": "deny",
-        "risk": "critical",
-        "reason": f"prefilter: {matched_label}",
-        "indicators": hits[:10],
+        "verdict": "ask",
+        "risk": "medium",
+        "reason": f"prefilter (doc-only): {matched_label}",
+        "indicators": doc_hits[:10],
     }
 
 
@@ -138,12 +187,12 @@ def _cache_key(ecosystem: str, name: str, version: str | None) -> str:
 
 
 def _cache_load(key: str) -> dict | None:
-    path = CACHE_DIR / f"{key}.json"
+    path = cache_dir() / f"{key}.json"
     try:
         st = path.stat()
     except FileNotFoundError:
         return None
-    if time.time() - st.st_mtime > CACHE_TTL_SECONDS:
+    if time.time() - st.st_mtime > cache_ttl_seconds():
         return None
     try:
         with path.open("r", encoding="utf-8") as fh:
@@ -154,8 +203,9 @@ def _cache_load(key: str) -> dict | None:
 
 def _cache_store(key: str, verdict: dict) -> None:
     try:
-        CACHE_DIR.mkdir(parents=True, exist_ok=True)
-        path = CACHE_DIR / f"{key}.json"
+        root = cache_dir()
+        root.mkdir(parents=True, exist_ok=True)
+        path = root / f"{key}.json"
         tmp = path.with_suffix(".tmp")
         with tmp.open("w", encoding="utf-8") as fh:
             json.dump(verdict, fh)
@@ -212,7 +262,12 @@ def _candidate_verdict_jsons(text: str) -> list[str]:
     """Return candidate JSON object substrings in priority order:
     1. fenced ``` ```json ... ``` ``` block(s)
     2. shallow object literal(s) containing a `"verdict"` key
-    3. greedy outermost `{...}` slice (legacy behaviour)
+
+    A greedy outermost-`{...}` fallback used to live here but was
+    removed: it accepted arbitrary stray-brace pairs in LLM prose,
+    which is an injection vector when fetched package content can
+    influence the analyzer's output. Unparseable output now returns
+    None and the caller defaults to `ask` (safe).
     """
     out: list[str] = []
     for match in JSON_FENCE_RE.findall(text):
@@ -221,12 +276,6 @@ def _candidate_verdict_jsons(text: str) -> list[str]:
     for match in VERDICT_OBJECT_RE.findall(text):
         if match not in out:
             out.append(match)
-    start = text.find("{")
-    end = text.rfind("}")
-    if start != -1 and end > start:
-        legacy = text[start : end + 1]
-        if legacy not in out:
-            out.append(legacy)
     return out
 
 

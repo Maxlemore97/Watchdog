@@ -15,16 +15,33 @@ from pathlib import Path
 
 from .paths import cache_dir
 
-CACHE_DIR = cache_dir()
-LEDGER_PATH = CACHE_DIR / "vetted_plugins.json"
 LEDGER_VERSION = 1
 
 SELF_NAME = "watchdog"
 
-MAX_SCANS_PER_SESSION = int(os.environ.get("WATCHDOG_SESSION_MAX_SCANS", "10"))
-
 HASH_DIRS = (".claude-plugin", "hooks", "commands", "skills")
 HASH_FILES = ("plugin.json",)
+
+
+def ledger_path() -> Path:
+    return cache_dir() / "vetted_plugins.json"
+
+
+def max_scans_per_session() -> int:
+    try:
+        return int(os.environ.get("WATCHDOG_SESSION_MAX_SCANS", "10"))
+    except ValueError:
+        return 10
+
+
+def __getattr__(name: str):
+    if name == "CACHE_DIR":
+        return cache_dir()
+    if name == "LEDGER_PATH":
+        return ledger_path()
+    if name == "MAX_SCANS_PER_SESSION":
+        return max_scans_per_session()
+    raise AttributeError(f"module 'watchdog_core.ledger' has no attribute {name!r}")
 
 
 def plugin_dirs() -> list[Path]:
@@ -50,7 +67,7 @@ def plugin_dirs() -> list[Path]:
 
 def load_ledger() -> dict:
     try:
-        with LEDGER_PATH.open("r", encoding="utf-8") as fh:
+        with ledger_path().open("r", encoding="utf-8") as fh:
             data = json.load(fh)
         if isinstance(data, dict) and isinstance(data.get("entries"), dict):
             return data
@@ -61,11 +78,12 @@ def load_ledger() -> dict:
 
 def save_ledger(ledger: dict) -> None:
     try:
-        CACHE_DIR.mkdir(parents=True, exist_ok=True)
-        tmp = LEDGER_PATH.with_suffix(".tmp")
+        cache_dir().mkdir(parents=True, exist_ok=True)
+        path = ledger_path()
+        tmp = path.with_suffix(".tmp")
         with tmp.open("w", encoding="utf-8") as fh:
             json.dump(ledger, fh, indent=2, sort_keys=True)
-        os.replace(tmp, LEDGER_PATH)
+        os.replace(tmp, path)
     except OSError:
         pass
 
@@ -98,14 +116,18 @@ def content_hash(plugin_root: Path) -> str:
 def read_manifest(plugin_root: Path) -> dict:
     for candidate in (".claude-plugin/plugin.json", "plugin.json"):
         path = plugin_root / candidate
-        if path.is_file():
-            try:
-                with path.open("r", encoding="utf-8") as fh:
-                    data = json.load(fh)
-                if isinstance(data, dict):
-                    return data
-            except (OSError, json.JSONDecodeError):
-                continue
+        # Reject symlinks: a hostile plugin could ship plugin.json as a
+        # symlink to ~/.aws/credentials etc. and have its contents read
+        # into the ledger and the LLM prompt.
+        if path.is_symlink() or not path.is_file():
+            continue
+        try:
+            with path.open("r", encoding="utf-8") as fh:
+                data = json.load(fh)
+            if isinstance(data, dict):
+                return data
+        except (OSError, json.JSONDecodeError):
+            continue
     return {}
 
 
@@ -154,7 +176,7 @@ def scan_plugins(
     if analyzer is None:
         from .analyzer import analyze_local_plugin as analyzer
     if max_scans is None:
-        max_scans = MAX_SCANS_PER_SESSION
+        max_scans = max_scans_per_session()
     entries = ledger.setdefault("entries", {})
     findings: list[tuple[str, dict]] = []
     dirty = False

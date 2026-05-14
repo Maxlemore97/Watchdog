@@ -5,6 +5,7 @@ preflight_install behaviour but operates on already-parsed Packages.
 """
 from __future__ import annotations
 
+import os
 import sys
 import unittest
 from pathlib import Path
@@ -154,6 +155,49 @@ class BudgetTests(unittest.TestCase):
             result = pf.preflight_packages(
                 [_pkg("a")], [], mode="claude", budget_secs=None
             )
+        self.assertEqual(result["verdict"], "allow")
+
+
+class PackageCapTests(unittest.TestCase):
+    """Bound input fan-out so a crafted 100-package install command can't
+    pile up N×OSV + N×LLM calls and blow the hook budget."""
+
+    def test_above_default_cap_returns_ask_without_scanning(self):
+        pkgs = [_pkg(f"p{i}") for i in range(21)]
+        with patch.object(pf, "query_osv") as q, \
+             patch.object(pf, "analyze_package") as ap:
+            result = pf.preflight_packages(pkgs, [], mode="both")
+        self.assertEqual(result["verdict"], "ask")
+        self.assertIn("too many packages", result["reason"])
+        q.assert_not_called()
+        ap.assert_not_called()
+        self.assertEqual(result["findings"], [])
+
+    def test_at_default_cap_still_scans(self):
+        pkgs = [_pkg(f"p{i}") for i in range(20)]
+        with patch.object(pf, "query_osv", return_value=[]), \
+             patch.object(pf, "analyze_package", return_value=None):
+            result = pf.preflight_packages(pkgs, [], mode="osv")
+        self.assertEqual(result["verdict"], "allow")
+
+    def test_cap_overridable_via_env(self):
+        pkgs = [_pkg(f"p{i}") for i in range(4)]
+        with patch.dict(os.environ, {"WATCHDOG_MAX_PACKAGES": "2"}), \
+             patch.object(pf, "query_osv") as q, \
+             patch.object(pf, "analyze_package") as ap:
+            result = pf.preflight_packages(pkgs, [], mode="both")
+        self.assertEqual(result["verdict"], "ask")
+        self.assertIn("too many packages", result["reason"])
+        q.assert_not_called()
+        ap.assert_not_called()
+
+    def test_cap_invalid_env_falls_back_to_default(self):
+        # Garbage env should not crash; default cap (20) applies.
+        pkgs = [_pkg(f"p{i}") for i in range(5)]
+        with patch.dict(os.environ, {"WATCHDOG_MAX_PACKAGES": "not-a-number"}), \
+             patch.object(pf, "query_osv", return_value=[]), \
+             patch.object(pf, "analyze_package", return_value=None):
+            result = pf.preflight_packages(pkgs, [], mode="osv")
         self.assertEqual(result["verdict"], "allow")
 
 

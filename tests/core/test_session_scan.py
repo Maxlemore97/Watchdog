@@ -108,8 +108,7 @@ class ContentHashTests(unittest.TestCase):
 class LedgerTests(unittest.TestCase):
     def test_roundtrip(self):
         with tempfile.TemporaryDirectory() as tmp:
-            with mock.patch.object(session_scan, "CACHE_DIR", Path(tmp)), \
-                 mock.patch.object(session_scan, "LEDGER_PATH", Path(tmp) / "vetted_plugins.json"):
+            with mock.patch.dict(os.environ, {"WATCHDOG_CACHE_DIR": tmp}):
                 ledger = {"version": 1, "entries": {"a": {"content_hash": "x"}}}
                 session_scan.save_ledger(ledger)
                 loaded = session_scan.load_ledger()
@@ -117,15 +116,14 @@ class LedgerTests(unittest.TestCase):
 
     def test_load_missing_returns_empty(self):
         with tempfile.TemporaryDirectory() as tmp:
-            with mock.patch.object(session_scan, "LEDGER_PATH", Path(tmp) / "missing.json"):
+            with mock.patch.dict(os.environ, {"WATCHDOG_CACHE_DIR": tmp}):
                 ledger = session_scan.load_ledger()
                 self.assertEqual(ledger, {"version": 1, "entries": {}})
 
     def test_load_corrupt_returns_empty(self):
         with tempfile.TemporaryDirectory() as tmp:
-            path = Path(tmp) / "bad.json"
-            path.write_text("not json")
-            with mock.patch.object(session_scan, "LEDGER_PATH", path):
+            (Path(tmp) / "vetted_plugins.json").write_text("not json")
+            with mock.patch.dict(os.environ, {"WATCHDOG_CACHE_DIR": tmp}):
                 ledger = session_scan.load_ledger()
                 self.assertEqual(ledger, {"version": 1, "entries": {}})
 
@@ -136,10 +134,7 @@ class LedgerTests(unittest.TestCase):
         import threading
 
         with tempfile.TemporaryDirectory() as tmp:
-            cache_dir = Path(tmp)
-            ledger_path = cache_dir / "vetted_plugins.json"
-            with mock.patch.object(session_scan, "CACHE_DIR", cache_dir), \
-                 mock.patch.object(session_scan, "LEDGER_PATH", ledger_path):
+            with mock.patch.dict(os.environ, {"WATCHDOG_CACHE_DIR": tmp}):
                 def writer(i):
                     session_scan.save_ledger({
                         "version": 1,
@@ -214,7 +209,7 @@ class ScanTests(unittest.TestCase):
                 return {"verdict": "allow"}
 
             ledger = {"version": 1, "entries": {}}
-            with mock.patch.object(session_scan, "MAX_SCANS_PER_SESSION", 2):
+            with mock.patch.dict(os.environ, {"WATCHDOG_SESSION_MAX_SCANS": "2"}):
                 findings, dirty, skipped = session_scan.scan_plugins(plugins, ledger, analyzer=fake)
             self.assertEqual(len(findings), 2)
             self.assertEqual(skipped, 3)
@@ -267,6 +262,45 @@ class FetchPluginLocalTests(unittest.TestCase):
 
     def test_skills_dir_constant_includes_skills(self):
         self.assertIn("skills", fetch_artifact.PLUGIN_INTERESTING_DIRS)
+
+    def test_rejects_symlinked_plugin_json(self):
+        # Hostile plugin ships .claude-plugin/plugin.json as a symlink
+        # to a host-side file. fetch_plugin_local must skip the symlink
+        # so the linked file's contents do not enter the LLM prompt or
+        # the ledger.
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "evil"
+            (root / ".claude-plugin").mkdir(parents=True)
+            target = Path(tmp) / "real-secret"
+            target.write_text("AKIAIOSFODNN7EXAMPLE")
+            os.symlink(target, root / ".claude-plugin" / "plugin.json")
+            bundle = fetch_artifact.fetch_plugin_local("evil", str(root))
+            self.assertIsNotNone(bundle)
+            self.assertNotIn(".claude-plugin/plugin.json", bundle.files)
+
+
+class ReadManifestSymlinkTests(unittest.TestCase):
+    def test_symlinked_manifest_returns_empty(self):
+        # ledger.read_manifest is used by session-start scanning. A
+        # symlinked plugin.json (pointing at ~/.aws/credentials etc.)
+        # must not have its target read into the ledger.
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            target = root / "real-manifest"
+            target.write_text(json.dumps({"name": "leak", "version": "9"}))
+            (root / ".claude-plugin").mkdir()
+            os.symlink(target, root / ".claude-plugin" / "plugin.json")
+            self.assertEqual(session_scan.read_manifest(root), {})
+
+    def test_real_manifest_still_read(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / ".claude-plugin").mkdir()
+            (root / ".claude-plugin" / "plugin.json").write_text(
+                json.dumps({"name": "real", "version": "1"})
+            )
+            self.assertEqual(session_scan.read_manifest(root),
+                             {"name": "real", "version": "1"})
 
 
 if __name__ == "__main__":

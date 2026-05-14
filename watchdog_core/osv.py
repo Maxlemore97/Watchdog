@@ -4,6 +4,10 @@ severity helpers.
 All HTTP requests are short-timeout, stdlib-only. Successful OSV responses
 are cached on disk under `WATCHDOG_CACHE_DIR` for `WATCHDOG_CACHE_TTL`
 seconds.
+
+Configuration (cache dir, TTL, severity floor) is re-read from the
+environment on every call so tests and long-lived processes can change
+it without re-importing the module.
 """
 from __future__ import annotations
 
@@ -17,36 +21,65 @@ import urllib.request
 from pathlib import Path
 from typing import Iterable
 
+from .log import log_event
 from .paths import cache_dir
 from .types import Package
 
 OSV_ENDPOINT = "https://api.osv.dev/v1/query"
 HTTP_TIMEOUT = 5.0
 
-CACHE_DIR = cache_dir()
-CACHE_TTL_SECONDS = int(os.environ.get("WATCHDOG_CACHE_TTL", "3600"))
-
 SEVERITY_RANK = {"none": 0, "low": 1, "medium": 2, "high": 3, "critical": 4}
 UNKNOWN_SEVERITY_RANK = SEVERITY_RANK["high"]
-MIN_SEVERITY = os.environ.get("WATCHDOG_MIN_SEVERITY", "low").strip().lower()
-if MIN_SEVERITY not in SEVERITY_RANK:
-    MIN_SEVERITY = "low"
-MIN_SEVERITY_RANK = SEVERITY_RANK[MIN_SEVERITY]
-
-RESOLVE_LATEST = os.environ.get("WATCHDOG_RESOLVE_LATEST", "1").strip().lower() not in {
-    "0",
-    "false",
-    "no",
-    "off",
-}
 
 USER_AGENT = "watchdog-scanner/0.3 (+https://github.com/)"
+
+
+def cache_ttl_seconds() -> int:
+    try:
+        return int(os.environ.get("WATCHDOG_CACHE_TTL", "3600"))
+    except ValueError:
+        return 3600
+
+
+def min_severity() -> str:
+    raw = os.environ.get("WATCHDOG_MIN_SEVERITY", "low").strip().lower()
+    return raw if raw in SEVERITY_RANK else "low"
+
+
+def min_severity_rank() -> int:
+    return SEVERITY_RANK[min_severity()]
+
+
+def resolve_latest() -> bool:
+    return os.environ.get("WATCHDOG_RESOLVE_LATEST", "1").strip().lower() not in {
+        "0",
+        "false",
+        "no",
+        "off",
+    }
+
+
+# Legacy module attributes — read env at access time so callers that did
+# `from watchdog_core.osv import MIN_SEVERITY` keep getting fresh values
+# when the env changes (e.g. between tests).
+def __getattr__(name: str):
+    if name == "MIN_SEVERITY":
+        return min_severity()
+    if name == "MIN_SEVERITY_RANK":
+        return min_severity_rank()
+    if name == "CACHE_DIR":
+        return cache_dir()
+    if name == "CACHE_TTL_SECONDS":
+        return cache_ttl_seconds()
+    if name == "RESOLVE_LATEST":
+        return resolve_latest()
+    raise AttributeError(f"module 'watchdog_core.osv' has no attribute {name!r}")
 
 
 def cache_path(pkg: Package) -> Path:
     key = f"{pkg.ecosystem}|{pkg.name}|{pkg.version or ''}".lower()
     digest = hashlib.sha256(key.encode("utf-8")).hexdigest()[:32]
-    return CACHE_DIR / f"{digest}.json"
+    return cache_dir() / f"{digest}.json"
 
 
 def cache_load(pkg: Package) -> list[dict] | None:
@@ -55,7 +88,7 @@ def cache_load(pkg: Package) -> list[dict] | None:
         st = path.stat()
     except FileNotFoundError:
         return None
-    if time.time() - st.st_mtime > CACHE_TTL_SECONDS:
+    if time.time() - st.st_mtime > cache_ttl_seconds():
         return None
     try:
         with path.open("r", encoding="utf-8") as fh:
@@ -66,7 +99,7 @@ def cache_load(pkg: Package) -> list[dict] | None:
 
 def cache_store(pkg: Package, vulns: list[dict]) -> None:
     try:
-        CACHE_DIR.mkdir(parents=True, exist_ok=True)
+        cache_dir().mkdir(parents=True, exist_ok=True)
         path = cache_path(pkg)
         tmp = path.with_suffix(".tmp")
         with tmp.open("w", encoding="utf-8") as fh:
@@ -121,7 +154,7 @@ def fetch_latest_version(pkg: Package) -> str | None:
 
 
 def resolve_version(pkg: Package) -> Package:
-    if pkg.version or not RESOLVE_LATEST:
+    if pkg.version or not resolve_latest():
         return pkg
     latest = fetch_latest_version(pkg)
     if not latest:
@@ -130,6 +163,11 @@ def resolve_version(pkg: Package) -> Package:
 
 
 def query_osv(pkg: Package) -> list[dict]:
+    """Look up advisories for `pkg` on OSV.dev. Returns `[]` on any
+    network or parse failure so callers do not have to wrap.
+
+    The blanket `Exception` catch in adapters._shared.preflight remains
+    in place as belt-and-suspenders for unexpected failure modes."""
     cached = cache_load(pkg)
     if cached is not None:
         return cached
@@ -140,10 +178,18 @@ def query_osv(pkg: Package) -> list[dict]:
     req = urllib.request.Request(
         OSV_ENDPOINT,
         data=json.dumps(body).encode("utf-8"),
-        headers={"Content-Type": "application/json"},
+        headers={"Content-Type": "application/json", "User-Agent": USER_AGENT},
     )
-    with urllib.request.urlopen(req, timeout=HTTP_TIMEOUT) as resp:
-        data = json.load(resp)
+    try:
+        with urllib.request.urlopen(req, timeout=HTTP_TIMEOUT) as resp:
+            data = json.load(resp)
+    except (urllib.error.URLError, TimeoutError, json.JSONDecodeError, OSError) as exc:
+        log_event(
+            "osv_query_failed",
+            package=f"{pkg.ecosystem}:{pkg.name}",
+            error=str(exc)[:200],
+        )
+        return []
     vulns = data.get("vulns", []) or []
     cache_store(pkg, vulns)
     return vulns
@@ -191,7 +237,8 @@ def severity_label(rank: int) -> str:
 
 
 def filter_by_severity(vulns: list[dict]) -> list[dict]:
-    return [v for v in vulns if severity_rank(v) >= MIN_SEVERITY_RANK]
+    threshold = min_severity_rank()
+    return [v for v in vulns if severity_rank(v) >= threshold]
 
 
 def summarize(vulns: Iterable[dict]) -> str:

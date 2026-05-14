@@ -532,7 +532,11 @@ def fetch_plugin_git(git_url: str, ref: str | None = None) -> ArtifactBundle | N
                 files[str(rel)] = content
 
         root_manifest = tmp / "plugin.json"
-        if root_manifest.is_file():
+        # Reject symlinks: a hostile remote could ship plugin.json as a
+        # symlink to a host-side file (e.g. ~/.aws/credentials) and have
+        # the contents read into the LLM prompt and verdict cache.
+        # `fetch_plugin_local` already has this check; mirror it here.
+        if root_manifest.is_file() and not root_manifest.is_symlink():
             content = _read_member(tmp, Path("plugin.json"))
             if content:
                 files["plugin.json"] = content

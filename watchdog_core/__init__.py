@@ -22,11 +22,19 @@ from .parsers import (
     parse_packages,
 )
 from .osv import (
-    MIN_SEVERITY,
     filter_by_severity,
+    min_severity,
     query_osv,
     summarize,
 )
+
+
+def __getattr__(name: str):
+    # Back-compat: `from watchdog_core import MIN_SEVERITY` keeps working
+    # but now reads env each time so tests can override.
+    if name == "MIN_SEVERITY":
+        return min_severity()
+    raise AttributeError(f"module 'watchdog_core' has no attribute {name!r}")
 from .analyzer import (
     analyze_local_plugin,
     analyze_package,
@@ -52,6 +60,7 @@ __all__ = [
     "parse_packages",
     "MIN_SEVERITY",
     "filter_by_severity",
+    "min_severity",
     "query_osv",
     "summarize",
     "analyze_local_plugin",

@@ -10,6 +10,7 @@ caller bail out cleanly with an `ask` instead of hanging the host.
 """
 from __future__ import annotations
 
+import os
 import time
 from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Iterable
@@ -22,10 +23,18 @@ from watchdog_core import (
     worst_verdict,
 )
 from watchdog_core.log import log_event
-from watchdog_core.osv import MIN_SEVERITY
+from watchdog_core.osv import min_severity
 from watchdog_core.types import Package
 
 VALID_MODES = {"osv", "claude", "both"}
+DEFAULT_MAX_PACKAGES = 20
+
+
+def _max_packages() -> int:
+    try:
+        return int(os.environ.get("WATCHDOG_MAX_PACKAGES", str(DEFAULT_MAX_PACKAGES)))
+    except ValueError:
+        return DEFAULT_MAX_PACKAGES
 
 
 def _pkg_label(p: Package) -> str:
@@ -89,6 +98,23 @@ def preflight_packages(
             "findings": [],
         }
 
+    # Bound input fan-out: a crafted install command (or LLM-generated
+    # one-liner) with many packages would otherwise spawn N×OSV and
+    # N×LLM calls and almost certainly blow the hook budget — at which
+    # point we default to `ask` anyway. Short-circuit here so we return
+    # an explicit reason instead of "budget exceeded".
+    cap = _max_packages()
+    if len(pkg_list) > cap:
+        return {
+            **base,
+            "verdict": "ask",
+            "reason": (
+                f"too many packages for inline scan ({len(pkg_list)} > {cap}); "
+                "raise WATCHDOG_MAX_PACKAGES or split the install"
+            ),
+            "findings": [],
+        }
+
     findings: list[dict[str, Any]] = []
     decisions: list[tuple[str, str]] = []
     budget_hit = False
@@ -126,7 +152,7 @@ def preflight_packages(
                     "package": _pkg_label(pkg),
                     "source": "osv",
                     "vulns": [v.get("id", "?") for v in filtered],
-                    "severity_threshold": MIN_SEVERITY,
+                    "severity_threshold": min_severity(),
                 })
 
     osv_denied = any(d[0] == "deny" for d in decisions)
@@ -163,7 +189,7 @@ def preflight_packages(
         return {
             **base,
             "verdict": "allow",
-            "reason": f"clean (mode={mode}, threshold={MIN_SEVERITY})",
+            "reason": f"clean (mode={mode}, threshold={min_severity()})",
             "findings": findings,
         }
 

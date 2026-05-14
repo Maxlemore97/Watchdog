@@ -27,7 +27,7 @@ dependencies = []
 
 [project.optional-dependencies]
 mcp = ["mcp>=1.0"]
-dev = ["pytest>=7"]
+dev = ["pytest>=7", "pyright>=1.1"]
 
 [project.urls]
 Repository = "https://github.com/Maxlemore97/Watchdog"
@@ -53,3 +53,11 @@ packages = [
 
 [tool.setuptools.package-data]
 watchdog_core = ["*.py"]
+
+[tool.pyright]
+include = ["watchdog_core", "adapters"]
+exclude = ["**/__pycache__", "tests"]
+pythonVersion = "3.10"
+typeCheckingMode = "basic"
+reportMissingImports = "warning"
+reportMissingTypeStubs = "none"

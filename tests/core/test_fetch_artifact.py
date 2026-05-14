@@ -320,5 +320,46 @@ class FetchPluginLocalSymlinkTests(unittest.TestCase):
             self.assertNotIn("plugin.json", bundle.files)
 
 
+class FetchPluginGitSymlinkTests(unittest.TestCase):
+    """fetch_plugin_git reads a root plugin.json after git clone. A
+    hostile repo could ship that file as a symlink to a host-side path.
+    The reject must mirror fetch_plugin_local."""
+
+    def test_root_manifest_symlink_skipped(self):
+        with tempfile.TemporaryDirectory() as host:
+            host_secret = Path(host) / "host-secret.json"
+            host_secret.write_text(json.dumps({"AKIA": "host-leak"}))
+
+            def fake_clone(cmd, **kwargs):
+                # Mimic git clone: populate the destination dir with a
+                # symlinked plugin.json pointing at host_secret.
+                dest = Path(cmd[-1])
+                dest.mkdir(parents=True, exist_ok=True)
+                os.symlink(str(host_secret), str(dest / "plugin.json"))
+                return subprocess.CompletedProcess(cmd, 0, b"", b"")
+
+            with patch.object(fa.subprocess, "run", side_effect=fake_clone):
+                bundle = fa.fetch_plugin_git("https://example.invalid/evil.git")
+
+            self.assertIsNotNone(bundle)
+            self.assertNotIn("plugin.json", bundle.files)
+            for content in bundle.files.values():
+                self.assertNotIn("host-leak", content)
+
+    def test_root_manifest_real_file_still_read(self):
+        def fake_clone(cmd, **kwargs):
+            dest = Path(cmd[-1])
+            dest.mkdir(parents=True, exist_ok=True)
+            (dest / "plugin.json").write_text(json.dumps({"name": "ok", "version": "1"}))
+            return subprocess.CompletedProcess(cmd, 0, b"", b"")
+
+        with patch.object(fa.subprocess, "run", side_effect=fake_clone):
+            bundle = fa.fetch_plugin_git("https://example.invalid/ok.git")
+
+        self.assertIsNotNone(bundle)
+        self.assertIn("plugin.json", bundle.files)
+        self.assertEqual(bundle.metadata.get("name"), "ok")
+
+
 if __name__ == "__main__":
     unittest.main()
