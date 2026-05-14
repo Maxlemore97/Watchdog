@@ -158,30 +158,34 @@ No CLI installed? Watchdog still runs OSV.dev CVE checks; only the LLM source re
 
 ## Four surfaces, one engine
 
-```
-+------------------------- where installs originate -------------------------+
-|                                                                            |
-|  Claude Code Bash tool ──┐                                                 |
-|  Claude Code /plugin     ├─→ watchdog-pretool / -session / -prompt /       |
-|  install                 ┘   -scan        (Claude Code hooks)              |
-|                                                                            |
-|  MCP-aware host          ──→ watchdog-mcp  (6 stdio tools)                 |
-|  (Cursor / Continue / …)                                                   |
-|                                                                            |
-|  Aider / Cline / plain   ──→ watchdog-shim + -shim-exec  (PATH wrappers)   |
-|  agent-driven shell                                                        |
-|                                                                            |
-|  PR adding a hostile     ──→ watchdog-action  (GitHub Action)              |
-|  skill / hook                                                              |
-|                                                                            |
-+----------------------------------------------------------------------------+
-                                  │
-                                  ▼
-                ┌─────────────────────────────────────────┐
-                │  internal/preflight                     │
-                │   OSV.dev query  +  LLM source review   │
-                │   prefilter      +  verdict aggregation │
-                └─────────────────────────────────────────┘
+```mermaid
+flowchart LR
+  subgraph Sources["Where installs originate"]
+    direction TB
+    cc["Claude Code<br/>Bash + /plugin install"]
+    mcp["MCP-aware host<br/>Cursor / Continue / Zed"]
+    sh["Aider / Cline /<br/>agent-driven shell"]
+    pr["GitHub PR<br/>hostile skill / hook"]
+  end
+  subgraph Adapters["Watchdog adapters"]
+    direction TB
+    a1["watchdog-pretool<br/>-session / -prompt / -scan"]
+    a2["watchdog-mcp"]
+    a3["watchdog-shim<br/>+ shim-exec"]
+    a4["watchdog-action"]
+  end
+  engine[("internal/preflight<br/>OSV + LLM aggregator")]
+  cache[("~/.cache/watchdog<br/>shared verdict cache")]
+
+  cc --> a1
+  mcp --> a2
+  sh --> a3
+  pr --> a4
+  a1 --> engine
+  a2 --> engine
+  a3 --> engine
+  a4 --> engine
+  engine <--> cache
 ```
 
 | Adapter         | Host                                                              | When to use                                                                            |
@@ -192,6 +196,42 @@ No CLI installed? Watchdog still runs OSV.dev CVE checks; only the LLM source re
 | `watchdog-action` | GitHub PRs                                                      | Repos that ship Claude Code plugins/skills publicly.                                   |
 
 All four adapters share `~/.cache/watchdog/`, so a plugin vetted by one is recognised by the rest.
+
+---
+
+## How a verdict is decided
+
+Every adapter funnels into the same pipeline. OSV runs first because it's fast, deterministic, and cached. A deny there short-circuits the LLM stage. A clean OSV result still goes through the deterministic prefilter (PEM keys, AWS/GitHub/OpenAI/Slack token shapes, `curl … | sh`, env-piped-to-network); only clean prefilter output reaches the LLM source review.
+
+```mermaid
+flowchart TD
+  start(["install command<br/>(npm install foo bar, /plugin install …)"])
+  parse["parsers.CollectPackages<br/>tokenize, split on && || ;, resolve unpinned versions"]
+  cap{"pkg count &gt;<br/>WATCHDOG_MAX_PACKAGES?"}
+  askCap["verdict: ask<br/>(reason: too many packages)"]
+  osv["OSV.dev query (parallel, cached)<br/>filter by WATCHDOG_MIN_SEVERITY"]
+  osvHit{"CVE at/above floor?"}
+  denyOSV["verdict: deny<br/>(GHSA-… [severity])"]
+  prefilter["deterministic prefilter<br/>regexes for keys, tokens, curl|sh, env|net"]
+  pfRes{"hit?"}
+  denyPF["verdict: deny<br/>(code-file hit)"]
+  askPF["verdict: ask<br/>(README-only hit)"]
+  llm["LLM source review<br/>UNTRUSTED-wrapped bundle"]
+  agg["policy.WorstVerdict<br/>allow &lt; ask &lt; deny"]
+  out(["verdict: allow / ask / deny<br/>+ findings"])
+
+  start --> parse --> cap
+  cap -- yes --> askCap
+  cap -- no --> osv --> osvHit
+  osvHit -- yes --> denyOSV --> agg
+  osvHit -- no --> prefilter --> pfRes
+  pfRes -- code --> denyPF --> agg
+  pfRes -- doc-only --> askPF --> agg
+  pfRes -- clean --> llm --> agg
+  agg --> out
+```
+
+Fail-closed defaults at every step: OSV unreachable → `ask` (or `deny` for the shim, which has no UI to ask through); analyzer panic recovered into `ask`; budget exceeded → `ask`. No silent allow.
 
 ---
 
