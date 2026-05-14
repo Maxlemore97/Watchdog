@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/Maxlemore97/watchdog/internal/analyzer"
+	"github.com/Maxlemore97/watchdog/internal/config"
 	"github.com/Maxlemore97/watchdog/internal/ghaction"
 	"github.com/Maxlemore97/watchdog/internal/policy"
 )
@@ -108,6 +109,7 @@ func emitFor(verdict, message string, a ghaction.Annotation) {
 }
 
 func main() {
+	_ = config.MustLoad()
 	base := baseRef()
 	head := headRef()
 	ws := workspace()

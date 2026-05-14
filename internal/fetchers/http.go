@@ -22,7 +22,15 @@ const (
 	MaxDownloadBytes = 5_000_000
 )
 
-func httpGet(rawURL string) []byte {
+// httpGet / httpGetJSON are package-level vars so unit tests in this
+// package can mock the network without running a real HTTP server.
+// Production callers see the same behavior as before.
+var (
+	httpGet     = httpGetReal
+	httpGetJSON = httpGetJSONReal
+)
+
+func httpGetReal(rawURL string) []byte {
 	req, err := http.NewRequest("GET", rawURL, nil)
 	if err != nil {
 		return nil
@@ -49,7 +57,7 @@ func httpGet(rawURL string) []byte {
 	return data
 }
 
-func httpGetJSON(rawURL string) map[string]any {
+func httpGetJSONReal(rawURL string) map[string]any {
 	raw := httpGet(rawURL)
 	if raw == nil {
 		return nil

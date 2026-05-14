@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"strings"
 	"time"
 
 	"github.com/Maxlemore97/watchdog/internal/types"
@@ -17,6 +18,42 @@ import (
 var pluginInterestingDirs = []string{"hooks", "commands", "skills", ".claude-plugin"}
 
 var gitURLRE = regexp.MustCompile(`^(https://|git@|ssh://)`)
+
+// safeGitArg rejects strings that could be reinterpreted as git/ssh
+// options when passed positionally. Defense in depth against
+// historical CVE-2017-1000117-class attacks (`ssh://-oProxyCommand=…`,
+// `--upload-pack=…` smuggled through a URL or branch ref).
+//
+// Modern git itself rejects these patterns; we still validate before
+// invocation so a future regression in git can't reach the
+// subprocess.
+func safeGitArg(s string) bool {
+	if s == "" {
+		return false
+	}
+	if strings.HasPrefix(s, "-") {
+		return false
+	}
+	// URL host component check: ssh://host/path or https://host/path.
+	// If the host starts with '-', reject (ssh interprets it as option).
+	for _, scheme := range []string{"https://", "ssh://"} {
+		if strings.HasPrefix(s, scheme) {
+			rest := s[len(scheme):]
+			if strings.HasPrefix(rest, "-") {
+				return false
+			}
+		}
+	}
+	// scp-like syntax: user@host:path. Host portion likewise must not
+	// start with '-'.
+	if strings.HasPrefix(s, "git@") {
+		rest := s[len("git@"):]
+		if strings.HasPrefix(rest, "-") {
+			return false
+		}
+	}
+	return true
+}
 
 func gitEnv() []string {
 	env := os.Environ()
@@ -35,6 +72,12 @@ func FetchPluginGit(gitURL, ref string) *types.ArtifactBundle {
 	if !gitURLRE.MatchString(gitURL) {
 		return nil
 	}
+	if !safeGitArg(gitURL) {
+		return nil
+	}
+	if ref != "" && !safeGitArg(ref) {
+		return nil
+	}
 	tmp, err := os.MkdirTemp("", "watchdog-clone-")
 	if err != nil {
 		return nil
@@ -46,7 +89,9 @@ func FetchPluginGit(gitURL, ref string) *types.ArtifactBundle {
 
 	args := []string{"clone", "--depth=1", "--filter=blob:none"}
 	if ref != "" {
-		args = append(args, "--branch", ref)
+		// `--branch=ref` (not `--branch ref`) forces git to treat ref
+		// as the option value, never as a follow-on option.
+		args = append(args, "--branch="+ref)
 	}
 	args = append(args, "--", gitURL, tmp)
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)

@@ -8,7 +8,7 @@ Single static binary. No Python. Works on Linux, macOS, and Windows.
 
 Host-agnostic. Catches installs from Claude Code, Cursor, Continue, Zed, OpenCode, Aider, Cline, plain shells driven by an agent — anywhere code gets installed on your behalf.
 
-[![Go 1.22+](https://img.shields.io/badge/go-1.22%2B-blue.svg)](https://go.dev/)
+[![Go 1.25+](https://img.shields.io/badge/go-1.25%2B-blue.svg)](https://go.dev/)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 [![Tests](https://img.shields.io/badge/tests-162%20passing-brightgreen.svg)](#testing)
 [![Zero runtime deps](https://img.shields.io/badge/runtime%20deps-mcp--go%20only-lightgrey.svg)](#engine)
@@ -243,7 +243,7 @@ hooks/        Claude Code hook shell scripts (POSIX)
 
 ## Building from source
 
-Requires Go 1.22+.
+Requires Go 1.25+ (mcp-go runtime dep floor).
 
 ```bash
 git clone https://github.com/Maxlemore97/Watchdog

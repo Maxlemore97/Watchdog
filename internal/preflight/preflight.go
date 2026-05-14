@@ -26,7 +26,10 @@ import (
 
 var ValidModes = map[string]bool{"osv": true, "claude": true, "both": true}
 
-const DefaultMaxPackages = 20
+// DefaultMaxPackages: fresh monorepo `npm install` from a lockfile
+// commonly produces >20 packages. Raised to 50 so the legitimate
+// happy path doesn't trip the ask-on-fan-out guard.
+const DefaultMaxPackages = 50
 
 // Injection seams — production points at the real implementations;
 // tests swap these out to avoid network and LLM calls. Keep package-
@@ -86,10 +89,10 @@ func Packages(pkgs []types.Package, notes []string, opts Options) Result {
 		return base
 	}
 
-	cap := maxPackages()
-	if len(pkgs) > cap {
+	maxPkgs := maxPackages()
+	if len(pkgs) > maxPkgs {
 		base.Verdict = "ask"
-		base.Reason = fmt.Sprintf("too many packages for inline scan (%d > %d); raise WATCHDOG_MAX_PACKAGES or split the install", len(pkgs), cap)
+		base.Reason = fmt.Sprintf("too many packages for inline scan (%d > %d); raise WATCHDOG_MAX_PACKAGES or split the install", len(pkgs), maxPkgs)
 		return base
 	}
 

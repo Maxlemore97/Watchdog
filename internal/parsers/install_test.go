@@ -326,3 +326,48 @@ func TestTokenize_BackslashEscape(t *testing.T) {
 		t.Errorf("got %v", got)
 	}
 }
+
+// ---------- shell-quote exported API -------------------------------
+
+func TestShellQuote_Roundtrip(t *testing.T) {
+	cases := []struct{ in, want string }{
+		{"", "''"},
+		{"plain", "plain"},
+		{"@scope/pkg", "@scope/pkg"},
+		{"with space", "'with space'"},
+		{"a'b", `'a'"'"'b'`},
+		{"$(evil)", `'$(evil)'`},
+		{"a;b", `'a;b'`},
+	}
+	for _, tc := range cases {
+		got := ShellQuote(tc.in)
+		if got != tc.want {
+			t.Errorf("ShellQuote(%q) = %q, want %q", tc.in, got, tc.want)
+		}
+		// Round-trip property: re-tokenize matches single-element input.
+		rt, err := Tokenize(got)
+		if err != nil {
+			t.Errorf("re-tokenize %q: %v", got, err)
+			continue
+		}
+		if tc.in == "" {
+			if len(rt) != 1 || rt[0] != "" {
+				t.Errorf("empty round-trip: %v", rt)
+			}
+		} else if len(rt) != 1 || rt[0] != tc.in {
+			t.Errorf("round-trip diverged: in=%q quoted=%q re=%v", tc.in, got, rt)
+		}
+	}
+}
+
+func TestIsShellSafe(t *testing.T) {
+	if !IsShellSafe("foo-bar_baz.tar.gz") {
+		t.Error("plain identifier rejected")
+	}
+	if IsShellSafe("with space") {
+		t.Error("space accepted")
+	}
+	if IsShellSafe("$(evil)") {
+		t.Error("substitution accepted")
+	}
+}

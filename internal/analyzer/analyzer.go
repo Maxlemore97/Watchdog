@@ -224,9 +224,12 @@ func cacheStore(key string, verdict map[string]any) {
 	// may still ENOENT but the cache content cannot be torn.
 	tmp := path + "." + strconv.Itoa(os.Getpid()) + ".tmp"
 	if err := os.WriteFile(tmp, data, 0o644); err != nil {
+		log.Event("cache_write_failed", map[string]any{"path": path, "stage": "write_tmp", "error": err.Error()})
 		return
 	}
-	_ = os.Rename(tmp, path)
+	if err := os.Rename(tmp, path); err != nil {
+		log.Event("cache_write_failed", map[string]any{"path": path, "stage": "rename", "error": err.Error()})
+	}
 }
 
 // ---------- prompt builder ----------------------------------------
@@ -302,73 +305,90 @@ func candidateVerdictJSONs(text string) []string {
 
 // extractVerdict pulls a strict-shape verdict object out of the LLM's
 // stdout. Returns nil on no parseable result.
+//
+// Pipeline: envelope-unwrap (skip Claude/OpenAI/etc. JSON wrappers) →
+// candidate-scan (find {…verdict…} objects) → normalize (clamp to
+// allow/ask/deny, ensure reason is non-empty).
 func extractVerdict(cliOutput string) map[string]any {
 	if cliOutput == "" {
 		return nil
 	}
-	// Try envelope JSON (e.g. `claude --output-format json` wraps the
-	// model response under `result` or `messages[…].content`).
+	text := unwrapEnvelope(cliOutput)
+	for _, cand := range candidateVerdictJSONs(text) {
+		if v := parseVerdict(cand); v != nil {
+			return v
+		}
+	}
+	return nil
+}
+
+// unwrapEnvelope strips the outer JSON envelope produced by LLM CLIs
+// such as `claude --output-format json` (where the model's response
+// lives at `result`, `text`, `response`, or the last assistant
+// `messages[…].content` slot). Returns the inner model text. If the
+// input isn't a recognized envelope, returns it unchanged.
+func unwrapEnvelope(cliOutput string) string {
 	var envelope any
-	candidateText := ""
-	if err := json.Unmarshal([]byte(cliOutput), &envelope); err == nil {
-		if env, ok := envelope.(map[string]any); ok {
-			if s, ok := env["result"].(string); ok && s != "" {
-				candidateText = s
-			} else if s, ok := env["text"].(string); ok && s != "" {
-				candidateText = s
-			} else if s, ok := env["response"].(string); ok && s != "" {
-				candidateText = s
+	if err := json.Unmarshal([]byte(cliOutput), &envelope); err != nil {
+		return cliOutput
+	}
+	env, ok := envelope.(map[string]any)
+	if !ok {
+		return cliOutput
+	}
+	for _, k := range []string{"result", "text", "response"} {
+		if s, ok := env[k].(string); ok && s != "" {
+			return s
+		}
+	}
+	msgs, ok := env["messages"].([]any)
+	if !ok {
+		return cliOutput
+	}
+	for i := len(msgs) - 1; i >= 0; i-- {
+		msg, ok := msgs[i].(map[string]any)
+		if !ok {
+			continue
+		}
+		switch c := msg["content"].(type) {
+		case string:
+			if c != "" {
+				return c
 			}
-			if candidateText == "" {
-				if msgs, ok := env["messages"].([]any); ok {
-					for i := len(msgs) - 1; i >= 0; i-- {
-						msg, ok := msgs[i].(map[string]any)
-						if !ok {
-							continue
-						}
-						switch c := msg["content"].(type) {
-						case string:
-							candidateText = c
-						case []any:
-							for _, item := range c {
-								m, ok := item.(map[string]any)
-								if !ok {
-									continue
-								}
-								if m["type"] == "text" {
-									if t, ok := m["text"].(string); ok {
-										candidateText = t
-										break
-									}
-								}
-							}
-						}
-						if candidateText != "" {
-							break
-						}
-					}
+		case []any:
+			for _, item := range c {
+				m, ok := item.(map[string]any)
+				if !ok {
+					continue
+				}
+				if m["type"] != "text" {
+					continue
+				}
+				if t, ok := m["text"].(string); ok && t != "" {
+					return t
 				}
 			}
 		}
 	}
-	if candidateText == "" {
-		candidateText = cliOutput
+	return cliOutput
+}
+
+// parseVerdict parses a candidate JSON string into a normalized
+// verdict map. Returns nil if the candidate isn't valid JSON.
+// Verdict is clamped to allow/ask/deny; reason is back-filled.
+func parseVerdict(cand string) map[string]any {
+	var parsed map[string]any
+	if err := json.Unmarshal([]byte(cand), &parsed); err != nil {
+		return nil
 	}
-	for _, cand := range candidateVerdictJSONs(candidateText) {
-		var parsed map[string]any
-		if err := json.Unmarshal([]byte(cand), &parsed); err != nil {
-			continue
-		}
-		v, _ := parsed["verdict"].(string)
-		if v != "allow" && v != "deny" && v != "ask" {
-			parsed["verdict"] = "ask"
-		}
-		if _, ok := parsed["reason"]; !ok {
-			parsed["reason"] = "no reason provided"
-		}
-		return parsed
+	v, _ := parsed["verdict"].(string)
+	if v != "allow" && v != "deny" && v != "ask" {
+		parsed["verdict"] = "ask"
 	}
-	return nil
+	if _, ok := parsed["reason"]; !ok {
+		parsed["reason"] = "no reason provided"
+	}
+	return parsed
 }
 
 // ---------- top-level entry points --------------------------------

@@ -123,9 +123,12 @@ func CacheStore(pkg types.Package, vulns []map[string]any) {
 	// cache writes via a shared staging filename.
 	tmp := path + "." + strconv.Itoa(os.Getpid()) + ".tmp"
 	if err := os.WriteFile(tmp, data, 0o644); err != nil {
+		log.Event("cache_write_failed", map[string]any{"path": path, "stage": "write_tmp", "error": err.Error()})
 		return
 	}
-	_ = os.Rename(tmp, path)
+	if err := os.Rename(tmp, path); err != nil {
+		log.Event("cache_write_failed", map[string]any{"path": path, "stage": "rename", "error": err.Error()})
+	}
 }
 
 // EndpointURL points at OSV.dev by default; tests override via env.

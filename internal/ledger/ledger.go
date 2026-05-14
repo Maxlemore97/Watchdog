@@ -16,6 +16,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Maxlemore97/watchdog/internal/log"
 	"github.com/Maxlemore97/watchdog/internal/paths"
 )
 
@@ -108,6 +109,52 @@ type LedgerEntry struct {
 	ScannedAt       int64  `json:"scanned_at"`
 }
 
+// WithLock serializes Load→modify→Save sequences across processes.
+//
+// Two SessionStart hooks running concurrently (e.g. multiple Claude
+// Code windows opened at once) would otherwise both Load the same
+// snapshot, both modify independently, and the second Save would
+// drop the first's scan results. The lock file is best-effort: a
+// stale lock older than staleLockSecs is forcibly broken so a
+// crashed sibling cannot wedge the ledger forever.
+//
+// fn always runs — if the lock cannot be acquired after retries, we
+// fall back to unlocked execution (the worst case is the original
+// race, which is also the pre-lock behavior).
+func WithLock(fn func()) {
+	dir := paths.CacheDir()
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		fn()
+		return
+	}
+	lockPath := LedgerPath() + ".lock"
+	const (
+		maxAttempts    = 50
+		retryDelay     = 100 * time.Millisecond
+		staleLockSecs  = 60
+	)
+	acquired := false
+	for i := 0; i < maxAttempts; i++ {
+		f, err := os.OpenFile(lockPath, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o644)
+		if err == nil {
+			_ = f.Close()
+			acquired = true
+			break
+		}
+		if st, statErr := os.Stat(lockPath); statErr == nil {
+			if time.Since(st.ModTime()) > staleLockSecs*time.Second {
+				_ = os.Remove(lockPath)
+				continue
+			}
+		}
+		time.Sleep(retryDelay)
+	}
+	if acquired {
+		defer os.Remove(lockPath)
+	}
+	fn()
+}
+
 func Load() Ledger {
 	path := LedgerPath()
 	data, err := os.ReadFile(path)
@@ -138,9 +185,12 @@ func Save(l Ledger) {
 	// tear each other's atomic-rename staging file.
 	tmp := path + "." + strconv.Itoa(os.Getpid()) + ".tmp"
 	if err := os.WriteFile(tmp, data, 0o644); err != nil {
+		log.Event("cache_write_failed", map[string]any{"path": path, "stage": "write_tmp", "error": err.Error()})
 		return
 	}
-	_ = os.Rename(tmp, path)
+	if err := os.Rename(tmp, path); err != nil {
+		log.Event("cache_write_failed", map[string]any{"path": path, "stage": "rename", "error": err.Error()})
+	}
 }
 
 // ContentHash returns a stable SHA-256 over the plugin's hashable files.

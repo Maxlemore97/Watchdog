@@ -172,9 +172,9 @@ func childEnv() []string {
 	return out
 }
 
-// boundedBuffer caps stderr capture from LLM CLIs so a misbehaving
-// provider (or a non-LLM binary the user pointed WATCHDOG_LLM_CMD at)
-// can't OOM watchdog by flooding stderr.
+// boundedBuffer caps stdout/stderr capture from LLM CLIs so a
+// misbehaving provider (or a non-LLM binary the user pointed
+// WATCHDOG_LLM_CMD at) can't OOM watchdog by flooding either stream.
 type boundedBuffer struct {
 	limit int
 	buf   bytes.Buffer
@@ -194,15 +194,20 @@ func (b *boundedBuffer) Write(p []byte) (int, error) {
 
 func (b *boundedBuffer) String() string { return b.buf.String() }
 
-const stderrCapBytes = 64 * 1024
+const (
+	stderrCapBytes = 64 * 1024
+	// stdoutCapBytes must accommodate Claude's JSON envelope with
+	// sources but still cap a runaway/hostile CLI.
+	stdoutCapBytes = 4 * 1024 * 1024
+)
 
 func runCmd(ctx context.Context, name string, args []string, stdin string) (string, error) {
 	cmd := exec.CommandContext(ctx, name, args...)
 	cmd.Stdin = strings.NewReader(stdin)
 	cmd.Env = childEnv()
-	var stdout bytes.Buffer
+	stdout := &boundedBuffer{limit: stdoutCapBytes}
 	stderr := &boundedBuffer{limit: stderrCapBytes}
-	cmd.Stdout = &stdout
+	cmd.Stdout = stdout
 	cmd.Stderr = stderr
 	if err := cmd.Run(); err != nil {
 		return "", fmt.Errorf("%s: %w (stderr: %s)", name, err, truncate(stderr.String(), 200))

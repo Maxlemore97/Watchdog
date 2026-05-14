@@ -176,23 +176,25 @@ func splitNaive(s string) []string {
 	return out
 }
 
-// joinShell re-quotes tokens for downstream Tokenize round-tripping.
-func joinShell(tokens []string) string {
+// JoinShell re-quotes tokens for downstream Tokenize round-tripping.
+// Single source of truth for POSIX shell quoting — also used by the
+// shim-exec dispatcher when it reconstructs the install command line.
+func JoinShell(tokens []string) string {
 	parts := make([]string, len(tokens))
 	for i, t := range tokens {
-		parts[i] = shellQuote(t)
+		parts[i] = ShellQuote(t)
 	}
 	return strings.Join(parts, " ")
 }
 
-// shellQuote single-quotes a token using POSIX rules. Empty string
+// ShellQuote single-quotes a token using POSIX rules. Empty string
 // becomes ''. A token containing only safe chars (alphanumerics and
 // a small allowlist) is returned unquoted.
-func shellQuote(s string) string {
+func ShellQuote(s string) string {
 	if s == "" {
 		return "''"
 	}
-	if isShellSafe(s) {
+	if IsShellSafe(s) {
 		return s
 	}
 	// Wrap in single quotes; escape embedded single quotes via the
@@ -200,7 +202,9 @@ func shellQuote(s string) string {
 	return "'" + strings.ReplaceAll(s, "'", `'"'"'`) + "'"
 }
 
-func isShellSafe(s string) bool {
+// IsShellSafe reports whether s is composed only of characters that
+// never need shell quoting (alphanumerics + a small allowlist).
+func IsShellSafe(s string) bool {
 	for _, r := range s {
 		safe := r >= 'a' && r <= 'z' ||
 			r >= 'A' && r <= 'Z' ||
@@ -214,3 +218,9 @@ func isShellSafe(s string) bool {
 	}
 	return true
 }
+
+// joinShell / shellQuote keep the lowercase names available for
+// internal callers (SplitOnOperators) without churn. They forward to
+// the exported variants so behavior stays single-sourced.
+func joinShell(tokens []string) string { return JoinShell(tokens) }
+func shellQuote(s string) string       { return ShellQuote(s) }

@@ -113,3 +113,32 @@ func IsShimmed(name string) bool {
 	}
 	return false
 }
+
+// IsShimDirFirstOnPath reports whether shimDir is the FIRST entry in
+// PATH (after resolving symlinks). Returns false if the user
+// accidentally appended the shim dir instead of prepending — in that
+// case real binaries on earlier PATH entries take precedence and
+// installs silently bypass watchdog.
+func IsShimDirFirstOnPath(shimDir string) bool {
+	if shimDir == "" {
+		return false
+	}
+	pathEnv := os.Getenv("PATH")
+	if pathEnv == "" {
+		return false
+	}
+	first := strings.SplitN(pathEnv, string(os.PathListSeparator), 2)[0]
+	first = strings.TrimSpace(first)
+	if first == "" {
+		return false
+	}
+	shimResolved := shimDir
+	if r, err := filepath.EvalSymlinks(shimDir); err == nil {
+		shimResolved = r
+	}
+	firstResolved := first
+	if r, err := filepath.EvalSymlinks(first); err == nil {
+		firstResolved = r
+	}
+	return firstResolved == shimResolved
+}

@@ -263,6 +263,42 @@ func TestScan_RespectsMaxScansEnv(t *testing.T) {
 	}
 }
 
+// TestWithLock_ConcurrentSave_NoLostUpdates verifies that wrapping
+// Load → modify → Save in WithLock prevents the classic lost-update
+// race: N goroutines each add a unique entry; the final ledger must
+// contain all N entries (no concurrent writer's modifications
+// clobbered by a sibling's Save).
+func TestWithLock_ConcurrentSave_NoLostUpdates(t *testing.T) {
+	t.Setenv("WATCHDOG_CACHE_DIR", t.TempDir())
+	const N = 16
+	var wg sync.WaitGroup
+	wg.Add(N)
+	for i := 0; i < N; i++ {
+		go func(i int) {
+			defer wg.Done()
+			WithLock(func() {
+				l := Load()
+				name := "plugin-" + string(rune('a'+i))
+				l.Entries[name] = LedgerEntry{
+					Name:        name,
+					ContentHash: "hash-" + name,
+					Verdict:     "allow",
+				}
+				Save(l)
+			})
+		}(i)
+	}
+	wg.Wait()
+
+	final := Load()
+	if len(final.Entries) != N {
+		t.Errorf("lost updates: got %d entries, want %d", len(final.Entries), N)
+		for k := range final.Entries {
+			t.Logf("  present: %s", k)
+		}
+	}
+}
+
 func TestScan_RecordsVerdictFields(t *testing.T) {
 	tmp := t.TempDir()
 	t.Setenv("WATCHDOG_CACHE_DIR", t.TempDir())

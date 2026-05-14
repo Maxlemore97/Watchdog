@@ -317,6 +317,35 @@ func TestInvokeGeneric_ArgvShape(t *testing.T) {
 	}
 }
 
+func TestRunCmd_StdoutCappedAtLimit(t *testing.T) {
+	// Generic provider that floods stdout. Verify captured output is
+	// bounded by stdoutCapBytes — a hostile or runaway CLI cannot OOM
+	// the analyzer by writing gigabytes to stdout.
+	dir := t.TempDir()
+	path := filepath.Join(dir, "stdout-flood")
+	// Write ~16 MB to stdout — 4x the cap.
+	script := `#!/bin/sh
+yes flood-line | head -c 16777216
+`
+	if err := os.WriteFile(path, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", dir+":/bin:/usr/bin")
+	t.Setenv("WATCHDOG_LLM_PROVIDER", "generic")
+	t.Setenv("WATCHDOG_LLM_CMD", "stdout-flood")
+
+	out, _, _, err := InvokeLLM("hi", "SYS")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(out) > stdoutCapBytes {
+		t.Errorf("stdout not capped: len=%d, want <= %d", len(out), stdoutCapBytes)
+	}
+	if len(out) == 0 {
+		t.Error("expected some stdout capture, got empty")
+	}
+}
+
 func TestRunCmd_StderrCappedAtLimit(t *testing.T) {
 	// Run a binary that floods stderr; verify the wrapped error
 	// message is bounded (stderrCapBytes capped at 64KB; the truncate

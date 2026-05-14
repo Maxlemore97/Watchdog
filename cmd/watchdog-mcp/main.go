@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"os"
 
+	"github.com/Maxlemore97/watchdog/internal/config"
 	wmcp "github.com/Maxlemore97/watchdog/internal/mcp"
 
 	"github.com/mark3labs/mcp-go/mcp"
@@ -26,6 +27,7 @@ import (
 )
 
 func main() {
+	_ = config.MustLoad()
 	s := server.NewMCPServer("watchdog", "0.4.0")
 
 	s.AddTool(

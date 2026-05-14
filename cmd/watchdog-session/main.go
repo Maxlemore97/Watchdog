@@ -13,6 +13,7 @@ import (
 	"strings"
 
 	"github.com/Maxlemore97/watchdog/internal/analyzer"
+	"github.com/Maxlemore97/watchdog/internal/config"
 	"github.com/Maxlemore97/watchdog/internal/ledger"
 	"github.com/Maxlemore97/watchdog/internal/policy"
 )
@@ -64,6 +65,7 @@ func main() {
 	if disabled() {
 		return
 	}
+	_ = config.MustLoad()
 	// Drain stdin (hook payload not used here).
 	_, _ = io.Copy(io.Discard, os.Stdin)
 
@@ -71,11 +73,16 @@ func main() {
 	if len(plugins) == 0 {
 		return
 	}
-	l := ledger.Load()
-	findings, dirty, skipped := ledger.Scan(plugins, &l, analyzer.AnalyzeLocalPlugin, 0)
-	if dirty {
-		ledger.Save(l)
-	}
+	var findings []ledger.ScanResult
+	var skipped int
+	ledger.WithLock(func() {
+		l := ledger.Load()
+		var dirty bool
+		findings, dirty, skipped = ledger.Scan(plugins, &l, analyzer.AnalyzeLocalPlugin, 0)
+		if dirty {
+			ledger.Save(l)
+		}
+	})
 	if len(findings) == 0 {
 		return
 	}

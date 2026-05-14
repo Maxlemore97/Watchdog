@@ -224,6 +224,45 @@ func TestFetchPluginLocal_NilForMissingDir(t *testing.T) {
 	}
 }
 
+// ---------- git option-injection defense -------------------------
+
+func TestSafeGitArg_RejectsOptionInjection(t *testing.T) {
+	cases := []struct {
+		in   string
+		want bool
+	}{
+		{"https://github.com/foo/bar", true},
+		{"git@github.com:foo/bar.git", true},
+		{"ssh://git@github.com/foo/bar", true},
+		{"main", true},
+
+		// Hostile inputs: must all be rejected.
+		{"-oProxyCommand=evil", false},
+		{"--upload-pack=evil", false},
+		{"ssh://-oProxyCommand=evil/x", false},
+		{"https://-evil/x", false},
+		{"git@-host:path", false},
+		{"", false},
+	}
+	for _, tc := range cases {
+		got := safeGitArg(tc.in)
+		if got != tc.want {
+			t.Errorf("safeGitArg(%q) = %v, want %v", tc.in, got, tc.want)
+		}
+	}
+}
+
+func TestFetchPluginGit_RejectsHostileURL(t *testing.T) {
+	// Hostile URL: scheme matches the gitURLRE prefix but host part
+	// starts with '-'. Must not invoke `git clone`.
+	if b := FetchPluginGit("ssh://-oProxyCommand=evil/x", ""); b != nil {
+		t.Errorf("hostile URL accepted: %+v", b)
+	}
+	if b := FetchPluginGit("https://example.com/foo", "--upload-pack=evil"); b != nil {
+		t.Errorf("hostile ref accepted: %+v", b)
+	}
+}
+
 func TestPluginInterestingDirs(t *testing.T) {
 	hasSkills := false
 	for _, d := range pluginInterestingDirs {

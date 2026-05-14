@@ -15,6 +15,7 @@ import (
 	"strings"
 
 	"github.com/Maxlemore97/watchdog/internal/analyzer"
+	"github.com/Maxlemore97/watchdog/internal/config"
 	"github.com/Maxlemore97/watchdog/internal/policy"
 )
 
@@ -32,6 +33,7 @@ func main() {
 		fmt.Println(`{"verdict":"ask","reason":"no target supplied"}`)
 		return
 	}
+	_ = config.MustLoad()
 	target := strings.TrimSpace(os.Args[1])
 
 	type plan struct {

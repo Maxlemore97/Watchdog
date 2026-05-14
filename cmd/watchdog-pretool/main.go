@@ -14,6 +14,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/Maxlemore97/watchdog/internal/config"
 	"github.com/Maxlemore97/watchdog/internal/osv"
 	"github.com/Maxlemore97/watchdog/internal/parsers"
 	"github.com/Maxlemore97/watchdog/internal/preflight"
@@ -77,6 +78,10 @@ func main() {
 	if disabled() {
 		return
 	}
+	// Validate config at startup so a typo'd env var fails fast
+	// rather than silently degrading a security default.
+	_ = config.MustLoad()
+
 	var payload hookPayload
 	dec := json.NewDecoder(os.Stdin)
 	if err := dec.Decode(&payload); err != nil {

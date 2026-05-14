@@ -16,6 +16,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/Maxlemore97/watchdog/internal/config"
 	"github.com/Maxlemore97/watchdog/internal/osv"
 	"github.com/Maxlemore97/watchdog/internal/parsers"
 	"github.com/Maxlemore97/watchdog/internal/preflight"
@@ -100,6 +101,12 @@ func main() {
 		fmt.Fprintln(os.Stderr, "watchdog-shim-exec: missing tool name")
 		os.Exit(2)
 	}
+	// Validate env config at startup unless disabled. We do this AFTER
+	// the args check (so a malformed invocation still gets the clear
+	// "missing tool name" message) but BEFORE any env-derived branches.
+	if !disabled() {
+		_ = config.MustLoad()
+	}
 	toolname := filepath.Base(os.Args[1])
 	// On Windows, strip a trailing .cmd/.exe from argv[0] so we look up
 	// the real `npm`, not `npm.cmd`.
@@ -118,6 +125,15 @@ func main() {
 		os.Exit(127)
 	}
 
+	// Visibility: if user has the shim dir on PATH but NOT first,
+	// some installs may resolve to the real binary directly,
+	// bypassing watchdog. Warn once per invocation, only on a TTY so
+	// CI logs don't get noisy.
+	if isTTY(os.Stderr) && !shim.IsShimDirFirstOnPath(shimDir()) {
+		fmt.Fprintln(os.Stderr,
+			"watchdog: WARNING — shim dir not first on PATH; installs may bypass scanning. Run `watchdog-shim doctor` for the fix.")
+	}
+
 	if disabled() {
 		os.Exit(execReal(real, toolname, toolArgs))
 	}
@@ -127,7 +143,7 @@ func main() {
 
 	// Reconstruct the install command via shell-quote join.
 	cmdParts := append([]string{toolname}, toolArgs...)
-	cmdLine := joinShell(cmdParts)
+	cmdLine := parsers.JoinShell(cmdParts)
 	pkgs, notes := parsers.CollectPackages(cmdLine, osv.ResolveVersion)
 
 	if len(pkgs) == 0 && len(notes) == 0 {
@@ -144,33 +160,3 @@ func main() {
 	os.Exit(1)
 }
 
-// joinShell single-quotes tokens for downstream tokenizer round-trip.
-func joinShell(tokens []string) string {
-	parts := make([]string, len(tokens))
-	for i, t := range tokens {
-		parts[i] = shellQuote(t)
-	}
-	return strings.Join(parts, " ")
-}
-
-func shellQuote(s string) string {
-	if s == "" {
-		return "''"
-	}
-	safe := true
-	for _, r := range s {
-		ok := r >= 'a' && r <= 'z' ||
-			r >= 'A' && r <= 'Z' ||
-			r >= '0' && r <= '9' ||
-			r == '@' || r == '%' || r == '+' || r == '=' ||
-			r == ':' || r == ',' || r == '.' || r == '/' || r == '-' || r == '_'
-		if !ok {
-			safe = false
-			break
-		}
-	}
-	if safe {
-		return s
-	}
-	return "'" + strings.ReplaceAll(s, "'", `'"'"'`) + "'"
-}

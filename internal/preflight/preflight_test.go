@@ -171,7 +171,7 @@ func TestPackages_AboveDefaultCapReturnsAsk(t *testing.T) {
 		func(string, string, string) map[string]any { llmCalls++; return nil },
 	)
 	defer restore()
-	pkgs := make([]types.Package, 21)
+	pkgs := make([]types.Package, DefaultMaxPackages+1)
 	for i := range pkgs {
 		pkgs[i] = pkg(fmt.Sprintf("p%d", i), "1")
 	}
@@ -197,7 +197,7 @@ func TestPackages_AtCapStillScans(t *testing.T) {
 		func(string, string, string) map[string]any { return nil },
 	)
 	defer restore()
-	pkgs := make([]types.Package, 20)
+	pkgs := make([]types.Package, DefaultMaxPackages)
 	for i := range pkgs {
 		pkgs[i] = pkg(fmt.Sprintf("p%d", i), "1")
 	}
@@ -317,3 +317,87 @@ func TestPackages_FindingsIncludeOSVAboveThreshold(t *testing.T) {
 	}
 }
 
+
+// ---------- edge paths ------------------------------------------
+
+// TestPackages_BudgetExceeded verifies that a slow analyzer trips
+// the wall-clock budget cap (preflight.go:101-208) and returns
+// `ask` with a budget-mentioning reason rather than blocking the
+// host indefinitely.
+func TestPackages_BudgetExceeded(t *testing.T) {
+	restore := withStubs(t,
+		stubOK,
+		func(eco, name, ver string) map[string]any {
+			time.Sleep(200 * time.Millisecond)
+			return map[string]any{"verdict": "allow", "reason": "fine"}
+		},
+	)
+	defer restore()
+	r := Packages(
+		[]types.Package{pkg("a", "1"), pkg("b", "1"), pkg("c", "1")},
+		nil,
+		Options{Mode: "claude", BudgetSeconds: 0.05},
+	)
+	if r.Verdict != "ask" {
+		t.Errorf("budget verdict = %q, want ask", r.Verdict)
+	}
+	if !strings.Contains(r.Reason, "budget") {
+		t.Errorf("budget reason missing keyword: %q", r.Reason)
+	}
+}
+
+// TestPackages_AnalyzerPanic verifies safeAnalyze recovers, surfaces
+// __error__, and preflight falls back to the offline decision rather
+// than crashing the host.
+func TestPackages_AnalyzerPanic(t *testing.T) {
+	restore := withStubs(t,
+		stubOK,
+		func(string, string, string) map[string]any {
+			panic("analyzer exploded")
+		},
+	)
+	defer restore()
+	r := Packages([]types.Package{pkg("a", "1")}, nil, Options{
+		Mode:            "claude",
+		OfflineDecision: "deny",
+	})
+	if r.Verdict != "deny" {
+		t.Errorf("panic + OfflineDecision=deny: verdict=%q want deny", r.Verdict)
+	}
+	if !strings.Contains(r.Reason, "analyzer error") {
+		t.Errorf("missing analyzer-error in reason: %q", r.Reason)
+	}
+}
+
+// TestRunOSVParallel_PanicRecover verifies one panicking worker
+// doesn't take down siblings: 8 packages, the 4th's stub panics,
+// the rest must return results.
+func TestRunOSVParallel_PanicRecover(t *testing.T) {
+	var calls atomic.Int32
+	restore := withStubs(t,
+		func(p types.Package) ([]map[string]any, error) {
+			n := calls.Add(1)
+			if n == 4 {
+				panic("osv worker exploded")
+			}
+			return []map[string]any{}, nil
+		},
+		func(string, string, string) map[string]any { return nil },
+	)
+	defer restore()
+
+	pkgs := make([]types.Package, 8)
+	for i := range pkgs {
+		pkgs[i] = pkg(fmt.Sprintf("pkg-%d", i), "1")
+	}
+	r := Packages(pkgs, nil, Options{Mode: "osv", OfflineDecision: "ask"})
+	// The panicking worker yields verdict=ask (offline-decision); the
+	// other 7 are clean. Worst-wins -> ask.
+	if r.Verdict != "ask" {
+		t.Errorf("verdict = %q, want ask", r.Verdict)
+	}
+	// Must mention the panic recovery somewhere.
+	if !strings.Contains(r.Reason, "panic") && !strings.Contains(r.Reason, "OSV unreachable") {
+		t.Errorf("expected panic mention in reason: %q", r.Reason)
+	}
+}

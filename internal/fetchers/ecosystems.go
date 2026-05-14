@@ -128,15 +128,7 @@ func FetchNPM(name, version string) *types.ArtifactBundle {
 		}
 	}
 
-	metaOut := map[string]any{
-		"version":             firstString(meta["version"], version),
-		"author":              firstNonNil(meta["author"], meta["maintainers"]),
-		"license":             meta["license"],
-		"repository":          meta["repository"],
-		"homepage":            meta["homepage"],
-		"dependencies_count":  countDeps(meta["dependencies"]),
-		"description":         meta["description"],
-	}
+	metaOut := assembleNPMMetadata(meta, version)
 	return &types.ArtifactBundle{
 		Ecosystem: "npm",
 		Name:      name,
@@ -144,6 +136,21 @@ func FetchNPM(name, version string) *types.ArtifactBundle {
 		Files:     fitBundle(files),
 		Metadata:  metaOut,
 		Notes:     notes,
+	}
+}
+
+// assembleNPMMetadata builds the curated metadata view from the raw
+// registry response. Extracted so the assembly logic is unit-testable
+// without standing up the full network fetch.
+func assembleNPMMetadata(meta map[string]any, version string) map[string]any {
+	return map[string]any{
+		"version":             firstString(meta["version"], version),
+		"author":              firstNonNil(meta["author"], meta["maintainers"]),
+		"license":             meta["license"],
+		"repository":          meta["repository"],
+		"homepage":            meta["homepage"],
+		"dependencies_count":  countDeps(meta["dependencies"]),
+		"description":         meta["description"],
 	}
 }
 

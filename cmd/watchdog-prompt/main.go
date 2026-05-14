@@ -12,6 +12,7 @@ import (
 	"strings"
 
 	"github.com/Maxlemore97/watchdog/internal/analyzer"
+	"github.com/Maxlemore97/watchdog/internal/config"
 	"github.com/Maxlemore97/watchdog/internal/parsers"
 	"github.com/Maxlemore97/watchdog/internal/policy"
 )
@@ -53,6 +54,7 @@ func main() {
 	if disabled() {
 		return
 	}
+	_ = config.MustLoad()
 	var payload promptPayload
 	if err := json.NewDecoder(os.Stdin).Decode(&payload); err != nil {
 		return

@@ -41,6 +41,27 @@ try {
     Info "fetching $url"
     Invoke-WebRequest -Uri $url -OutFile $archivePath -UseBasicParsing
 
+    # ---------- verify checksum --------------------------------------
+    # goreleaser publishes checksums.txt alongside every archive. We
+    # refuse to extract a zip whose sha256 doesn't match.
+    $checksumsUrl = "https://github.com/$Repo/releases/download/$Version/checksums.txt"
+    $checksumsPath = Join-Path $tmp "checksums.txt"
+    Info "fetching checksums.txt"
+    Invoke-WebRequest -Uri $checksumsUrl -OutFile $checksumsPath -UseBasicParsing
+
+    $actual = (Get-FileHash -Path $archivePath -Algorithm SHA256).Hash.ToLower()
+    $expected = $null
+    foreach ($line in Get-Content $checksumsPath) {
+        $parts = $line.Trim() -split "\s+", 2
+        if ($parts.Length -eq 2 -and $parts[1] -eq $archive) {
+            $expected = $parts[0].ToLower()
+            break
+        }
+    }
+    if (-not $expected) { Fail "checksums.txt has no entry for $archive" }
+    if ($actual -ne $expected) { Fail "checksum mismatch: got $actual, want $expected" }
+    Info "checksum verified ($actual)"
+
     Info "extracting"
     Expand-Archive -Path $archivePath -DestinationPath $tmp -Force
 
