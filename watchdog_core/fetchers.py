@@ -60,9 +60,12 @@ def _http_get(url: str) -> bytes | None:
     req = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
     try:
         with urllib.request.urlopen(req, timeout=HTTP_TIMEOUT) as resp:
-            return resp.read(MAX_DOWNLOAD_BYTES + 1)
+            data = resp.read(MAX_DOWNLOAD_BYTES + 1)
     except (urllib.error.URLError, TimeoutError):
         return None
+    if len(data) > MAX_DOWNLOAD_BYTES:
+        return None
+    return data
 
 
 def _http_get_json(url: str) -> dict | None:
