@@ -129,7 +129,9 @@ EOF
 esac
 
 info "done. Binaries installed:"
-ls "$INSTALL_DIR" | grep '^watchdog-' || true
+for f in "$INSTALL_DIR"/watchdog-*; do
+    [ -e "$f" ] && basename "$f"
+done
 
 cat <<EOF
 
