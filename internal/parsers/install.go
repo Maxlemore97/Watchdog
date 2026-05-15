@@ -16,6 +16,7 @@ var EcosystemByCmd = map[string]string{
 	"npm":     "npm",
 	"pnpm":    "npm",
 	"yarn":    "npm",
+	"bun":     "npm",
 	"pip":     "PyPI",
 	"pip3":    "PyPI",
 	"uv":      "PyPI",
@@ -32,6 +33,7 @@ var InstallSubcmds = map[string]map[string]bool{
 	"npm":     {"install": true, "i": true, "add": true},
 	"pnpm":    {"add": true, "install": true, "i": true},
 	"yarn":    {"add": true},
+	"bun":     {"add": true, "install": true, "i": true},
 	"pip":     {"install": true},
 	"pip3":    {"install": true},
 	"uv":      {"add": true},
@@ -77,6 +79,9 @@ var flagsWithArg = map[string]map[string]bool{
 	},
 	"yarn": {
 		"--registry": true, "--cache-folder": true, "--modules-folder": true,
+	},
+	"bun": {
+		"--registry": true, "--cwd": true, "--config": true,
 	},
 	"cargo": {
 		"--registry": true, "--index": true, "--path": true, "--git": true,
@@ -130,7 +135,7 @@ var (
 // Empty version means unpinned.
 func SplitNameVersion(tok, binary string) (string, string) {
 	switch binary {
-	case "npm", "pnpm", "yarn":
+	case "npm", "pnpm", "yarn", "bun":
 		if strings.HasPrefix(tok, "@") {
 			slash := strings.Index(tok, "/")
 			if slash == -1 {

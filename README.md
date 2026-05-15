@@ -103,13 +103,13 @@ Grab the tarball or zip for your platform from [Releases](https://github.com/Max
 
 ## Set up the package-manager shims
 
-The shims are PATH-prepend wrappers that intercept every `npm`, `pip`, `cargo`, `gem`, `composer`, `pnpm`, `yarn`, `pip3`, `uv`, and `poetry` invocation. Without them, Watchdog only fires inside Claude Code or MCP-aware hosts.
+The shims are PATH-prepend wrappers that intercept every `npm`, `pip`, `cargo`, `gem`, `composer`, `pnpm`, `yarn`, `bun`, `pip3`, `uv`, and `poetry` invocation. Without them, Watchdog only fires inside Claude Code or MCP-aware hosts.
 
 ```bash
 watchdog-shim install
 ```
 
-Writes ten wrapper scripts into `~/.watchdog/bin/` (Linux/macOS) or `%USERPROFILE%\.watchdog\bin` (Windows). The command prints the exact PATH line to add. **The shim dir must be FIRST on your PATH** — otherwise installs resolve to the real binary directly and bypass scanning.
+Writes eleven wrapper scripts into `~/.watchdog/bin/` (Linux/macOS) or `%USERPROFILE%\.watchdog\bin` (Windows). The command prints the exact PATH line to add. **The shim dir must be FIRST on your PATH** — otherwise installs resolve to the real binary directly and bypass scanning.
 
 Linux / macOS, bash or zsh:
 

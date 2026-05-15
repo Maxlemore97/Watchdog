@@ -13,7 +13,7 @@ import (
 
 // ShimmedTools lists the package-manager binaries Watchdog intercepts.
 var ShimmedTools = []string{
-	"npm", "pnpm", "yarn",
+	"npm", "pnpm", "yarn", "bun",
 	"pip", "pip3", "uv", "poetry",
 	"cargo", "gem", "composer",
 }

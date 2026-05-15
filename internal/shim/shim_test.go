@@ -22,7 +22,7 @@ func TestIsShimmed(t *testing.T) {
 }
 
 func TestShimmedTools_HasAllExpected(t *testing.T) {
-	want := []string{"npm", "pnpm", "yarn", "pip", "pip3", "uv", "poetry", "cargo", "gem", "composer"}
+	want := []string{"npm", "pnpm", "yarn", "bun", "pip", "pip3", "uv", "poetry", "cargo", "gem", "composer"}
 	for _, w := range want {
 		found := false
 		for _, t2 := range ShimmedTools {

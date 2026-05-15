@@ -43,6 +43,12 @@ var ParityCases = []struct {
 	{"pip-editable", "pip install -e ./local", nil, 1},
 	{"pip-url", "pip install https://example.com/x.whl", nil, 1},
 
+	{"bun-add", "bun add react@18",
+		[]types.Package{{Ecosystem: "npm", Name: "react", Version: "18"}}, 0},
+	{"bun-install-no-args", "bun install", nil, 0},
+	{"bun-scoped", "bun add @types/node@20.0.0",
+		[]types.Package{{Ecosystem: "npm", Name: "@types/node", Version: "20.0.0"}}, 0},
+
 	{"uv-pip", "uv pip install httpx==0.27",
 		[]types.Package{{Ecosystem: "PyPI", Name: "httpx", Version: "0.27"}}, 0},
 	{"uv-add", "uv add ruff",
