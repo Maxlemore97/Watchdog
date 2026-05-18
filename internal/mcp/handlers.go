@@ -1,4 +1,4 @@
-// Package mcp implements the six pure-Go tool handlers that the
+// Package mcp implements the pure-Go tool handlers that the
 // watchdog-mcp binary exposes via stdio MCP. Pulling them out of the
 // cmd/main means we can unit-test them without standing up the
 // mark3labs/mcp-go SDK — only the thin SDK plumbing lives in
@@ -6,13 +6,21 @@
 package mcp
 
 import (
+	"time"
+
 	"github.com/Maxlemore97/watchdog/internal/analyzer"
+	"github.com/Maxlemore97/watchdog/internal/integrity"
 	"github.com/Maxlemore97/watchdog/internal/ledger"
 	"github.com/Maxlemore97/watchdog/internal/osv"
 	"github.com/Maxlemore97/watchdog/internal/parsers"
 	"github.com/Maxlemore97/watchdog/internal/preflight"
 	"github.com/Maxlemore97/watchdog/internal/types"
+	"github.com/Maxlemore97/watchdog/internal/version"
 )
+
+// startedAt records when this process began serving. The
+// watchdog_health tool surfaces it as uptime.
+var startedAt = time.Now()
 
 // PreflightInstall parses an install command line and runs the shared
 // preflight aggregator. Returns the structured Result for the MCP
@@ -73,8 +81,8 @@ type OSVQueryResult struct {
 
 // OSVQuery returns the raw OSV.dev result + a filtered list at the
 // configured severity floor.
-func OSVQuery(ecosystem, name, version string) OSVQueryResult {
-	pkg := types.Package{Ecosystem: ecosystem, Name: name, Version: version}
+func OSVQuery(ecosystem, name, ver string) OSVQueryResult {
+	pkg := types.Package{Ecosystem: ecosystem, Name: name, Version: ver}
 	vulns, err := osv.Query(pkg)
 	if err != nil {
 		return OSVQueryResult{
@@ -88,5 +96,47 @@ func OSVQuery(ecosystem, name, version string) OSVQueryResult {
 		Vulns:     vulns,
 		Filtered:  osv.FilterBySeverity(vulns),
 		Threshold: osv.MinSeverity(),
+	}
+}
+
+// HealthResult is the structured output of the watchdog_health tool.
+// Agents should call this once at session start and refuse to proceed
+// with package work if Status != "ok".
+type HealthResult struct {
+	// Version of the watchdog-mcp binary (ldflag-stamped at build).
+	Version string `json:"version"`
+	// Status is "ok" (fully protective), "degraded" (some integrity
+	// check failed but server is up), or "disabled" (WATCHDOG_DISABLE).
+	Status string `json:"status"`
+	// ManifestPresent indicates whether `watchdog-shim install` has
+	// been run. False means no integrity enforcement is in effect.
+	ManifestPresent bool `json:"manifest_present"`
+	// Integrity carries the full VerifyDeep result. Agents can inspect
+	// Integrity.Failures for fine-grained reasons.
+	Integrity integrity.Status `json:"integrity"`
+	// HandlerTimeoutSec is the per-tool ceiling enforced by Guard.
+	HandlerTimeoutSec float64 `json:"handler_timeout_sec"`
+	// UptimeSec is how long this server process has been running.
+	UptimeSec float64 `json:"uptime_sec"`
+}
+
+// Health returns a structured health snapshot for the agent. Always
+// safe to call; never blocks on network.
+func Health() HealthResult {
+	st := integrity.VerifyDeep()
+	status := "ok"
+	switch {
+	case st.Disabled:
+		status = "disabled"
+	case !st.OK:
+		status = "degraded"
+	}
+	return HealthResult{
+		Version:           version.String(),
+		Status:            status,
+		ManifestPresent:   !st.ManifestMissing,
+		Integrity:         st,
+		HandlerTimeoutSec: HandlerTimeout().Seconds(),
+		UptimeSec:         time.Since(startedAt).Seconds(),
 	}
 }

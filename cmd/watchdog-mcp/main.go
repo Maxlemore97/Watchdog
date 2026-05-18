@@ -1,7 +1,7 @@
 // watchdog-mcp: MCP server exposing the Watchdog engine to any
 // MCP-aware agent (Claude Desktop, Cursor, Continue, ...).
 //
-// Six tools mirror the Python adapter:
+// Tools:
 //
 //	watchdog_preflight_install     parse + OSV + (optional) LLM
 //	watchdog_scan_package          LLM source review of one package
@@ -9,9 +9,12 @@
 //	watchdog_audit_plugin_local    audit an already-installed plugin dir
 //	watchdog_list_vetted_plugins   read the persistent ledger
 //	watchdog_osv_query             raw OSV.dev query (no LLM, no caching)
+//	watchdog_health                self-check: integrity + uptime + version
 //
-// Tool handler logic lives in internal/mcp/handlers.go so it can be
-// unit-tested without the SDK; this file is only SDK glue.
+// Every tool runs through wmcp.Guard, which adds panic recovery, a
+// bounded timeout, and audit-log entries. Handler business logic
+// lives in internal/mcp/handlers.go so it can be unit-tested without
+// the SDK; this file is only SDK glue.
 package main
 
 import (
@@ -98,6 +101,16 @@ func main() {
 		handleOSVQuery,
 	)
 
+	s.AddTool(
+		mcp.NewTool("watchdog_health",
+			mcp.WithDescription(
+				"Return the Watchdog server's self-check: version, uptime, "+
+					"and integrity-manifest status. Call this once at session "+
+					"start; if `status` is not `\"ok\"`, refuse to install or "+
+					"vet packages and surface `integrity.failures` to the user.")),
+		handleHealth,
+	)
+
 	if err := server.ServeStdio(s); err != nil {
 		fmt.Fprintf(os.Stderr, "watchdog-mcp: serve: %v\n", err)
 		os.Exit(1)
@@ -105,17 +118,32 @@ func main() {
 }
 
 // ---------- SDK glue: argument extraction + Result marshaling -----
+//
+// Every handler runs its business call inside wmcp.Guard so a panic,
+// a hung downstream, or a slow LLM returns a structured error rather
+// than killing the server. wrapResult adapts (any, error) into the
+// SDK's (*mcp.CallToolResult, error) — a tool error becomes a
+// CallToolResult with isError=true (no transport error).
 
-func handlePreflightInstall(_ context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+func wrapResult(v any, err error) (*mcp.CallToolResult, error) {
+	if err != nil {
+		return mcp.NewToolResultError(err.Error()), nil
+	}
+	return mcp.NewToolResultJSON(v)
+}
+
+func handlePreflightInstall(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	command, err := req.RequireString("command")
 	if err != nil {
 		return mcp.NewToolResultError(err.Error()), nil
 	}
 	mode := req.GetString("mode", "both")
-	return mcp.NewToolResultJSON(wmcp.PreflightInstall(command, mode))
+	return wrapResult(wmcp.Guard(ctx, "watchdog_preflight_install", func(_ context.Context) (any, error) {
+		return wmcp.PreflightInstall(command, mode), nil
+	}))
 }
 
-func handleScanPackage(_ context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+func handleScanPackage(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	ecosystem, err := req.RequireString("ecosystem")
 	if err != nil {
 		return mcp.NewToolResultError(err.Error()), nil
@@ -124,18 +152,23 @@ func handleScanPackage(_ context.Context, req mcp.CallToolRequest) (*mcp.CallToo
 	if err != nil {
 		return mcp.NewToolResultError(err.Error()), nil
 	}
-	return mcp.NewToolResultJSON(wmcp.ScanPackage(ecosystem, name, req.GetString("version", "")))
+	ver := req.GetString("version", "")
+	return wrapResult(wmcp.Guard(ctx, "watchdog_scan_package", func(_ context.Context) (any, error) {
+		return wmcp.ScanPackage(ecosystem, name, ver), nil
+	}))
 }
 
-func handleAuditPlugin(_ context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+func handleAuditPlugin(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	target, err := req.RequireString("target")
 	if err != nil {
 		return mcp.NewToolResultError(err.Error()), nil
 	}
-	return mcp.NewToolResultJSON(wmcp.AuditPlugin(target))
+	return wrapResult(wmcp.Guard(ctx, "watchdog_audit_plugin", func(_ context.Context) (any, error) {
+		return wmcp.AuditPlugin(target), nil
+	}))
 }
 
-func handleAuditPluginLocal(_ context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+func handleAuditPluginLocal(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	name, err := req.RequireString("name")
 	if err != nil {
 		return mcp.NewToolResultError(err.Error()), nil
@@ -144,14 +177,18 @@ func handleAuditPluginLocal(_ context.Context, req mcp.CallToolRequest) (*mcp.Ca
 	if err != nil {
 		return mcp.NewToolResultError(err.Error()), nil
 	}
-	return mcp.NewToolResultJSON(wmcp.AuditPluginLocal(name, path))
+	return wrapResult(wmcp.Guard(ctx, "watchdog_audit_plugin_local", func(_ context.Context) (any, error) {
+		return wmcp.AuditPluginLocal(name, path), nil
+	}))
 }
 
-func handleListVettedPlugins(_ context.Context, _ mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-	return mcp.NewToolResultJSON(wmcp.ListVettedPlugins())
+func handleListVettedPlugins(ctx context.Context, _ mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	return wrapResult(wmcp.Guard(ctx, "watchdog_list_vetted_plugins", func(_ context.Context) (any, error) {
+		return wmcp.ListVettedPlugins(), nil
+	}))
 }
 
-func handleOSVQuery(_ context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+func handleOSVQuery(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	ecosystem, err := req.RequireString("ecosystem")
 	if err != nil {
 		return mcp.NewToolResultError(err.Error()), nil
@@ -160,5 +197,14 @@ func handleOSVQuery(_ context.Context, req mcp.CallToolRequest) (*mcp.CallToolRe
 	if err != nil {
 		return mcp.NewToolResultError(err.Error()), nil
 	}
-	return mcp.NewToolResultJSON(wmcp.OSVQuery(ecosystem, name, req.GetString("version", "")))
+	ver := req.GetString("version", "")
+	return wrapResult(wmcp.Guard(ctx, "watchdog_osv_query", func(_ context.Context) (any, error) {
+		return wmcp.OSVQuery(ecosystem, name, ver), nil
+	}))
+}
+
+func handleHealth(ctx context.Context, _ mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	return wrapResult(wmcp.Guard(ctx, "watchdog_health", func(_ context.Context) (any, error) {
+		return wmcp.Health(), nil
+	}))
 }
