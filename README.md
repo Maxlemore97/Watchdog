@@ -24,6 +24,8 @@ Watchdog sits in front of that. The check runs in two stages:
 
 Worst verdict across the packages in a command wins. If OSV is unreachable, the LLM CLI isn't installed, or the analyzer times out, the default is `ask`. There's no path where Watchdog silently allows something it couldn't check.
 
+Beyond the verdict, an Ed25519-signed integrity manifest detects tampering with Watchdog's own state — binaries, shim wrappers, decision tokens. The hook wrappers fail-closed on tamper instead of silently passing. See [Tamper resistance](#tamper-resistance).
+
 If you already have something covering manifest edits in PRs, this isn't a replacement for that. It covers the surface those tools weren't built for.
 
 ---
@@ -37,7 +39,11 @@ Three commands:
 curl -fsSL https://raw.githubusercontent.com/Maxlemore97/Watchdog/main/install.sh | sh
 
 # 2. If the installer warned about PATH, fix it. Then install the
-#    package-manager shims.
+#    package-manager shims. On a TTY, this also generates the local
+#    Ed25519 signing keypair and prompts to wire up any detected
+#    MCP-aware hosts (Claude Desktop, Cursor, Continue, Cline, Zed).
+#    Use --no-register to skip the prompt; --register (or -y) to
+#    accept without prompting.
 export PATH="$HOME/.local/bin:$PATH"
 watchdog-shim install
 
@@ -56,10 +62,10 @@ watchdog-shim doctor:
   ok  at least one LLM provider CLI on PATH
   ok  cache dir writable (/home/you/.cache/watchdog)
   ok  integrity manifest matches (/home/you/.watchdog/manifest.json)
-  warn cursor detected but not registered — run `watchdog-shim register --host=cursor`
+  ok  cursor: watchdog-mcp registered (/home/you/.cursor/mcp.json)
 ```
 
-`doctor` is the single source of truth across every layer: PATH, the shim binaries, the integrity manifest (see [Tamper resistance](#tamper-resistance)), and any MCP-aware host you have installed. Run it after install and any time something looks off.
+`doctor` is the single source of truth across every layer: PATH, the shim binaries, the integrity manifest + signature (see [Tamper resistance](#tamper-resistance)), and any MCP-aware host you have installed. Run it after install and any time something looks off.
 
 If `doctor` warns that no LLM provider CLI is on PATH, that's fine. Watchdog will still run OSV checks; the LLM review just gets skipped. Install `claude`, `gemini`, `openai`, or `ollama` if you want it back (see [LLM providers](#llm-providers)).
 
@@ -310,7 +316,7 @@ Confirm it's wired up by running `/plugin` and looking for `watchdog` in the lis
 
 ## MCP server
 
-`watchdog-mcp` is a stdio MCP server. Seven tools:
+`watchdog-mcp` defaults to stdio (one child per MCP host session). It can also serve HTTP+SSE over a unix socket or loopback TCP via `--listen` — see [Daemon mode](#daemon-mode). Seven tools:
 
 | Tool                            | What it does                                                     |
 |---------------------------------|------------------------------------------------------------------|
@@ -501,9 +507,9 @@ Bypass once: `WATCHDOG_DISABLE=1 npm install something`. Short-circuits to a str
 
 Full version with disclosure address: [SECURITY.md](SECURITY.md). Short version:
 
-In scope: prompt injection from fetched artifacts, malicious install commands, supply-chain payloads in published packages, hostile plugin repos, recursive LLM invocation, OSV / registry network failure, DoS via install-command fan-out. Tamper attempts on Watchdog's own state (manifest, binaries, hook config) — detected on the next request and logged to the audit log; see [Tamper resistance](#tamper-resistance).
+In scope: prompt injection from fetched artifacts, malicious install commands, supply-chain payloads in published packages, hostile plugin repos, recursive LLM invocation, OSV / registry network failure, DoS via install-command fan-out. Tamper attempts on Watchdog's own state — detected via Ed25519 signatures on the manifest and decision tokens, and logged to the audit log on each request. See [Tamper resistance](#tamper-resistance).
 
-Out of scope: filesystem-write attackers who can also rewrite the verifier (manifest signing is a v2 goal), verdict cache poisoning, compromised LLM provider CLIs, SSRF via plugin git URLs.
+Out of scope: filesystem-write attackers who can read the local signing key at `~/.watchdog/.signing.key` and re-sign forged state — combined signing (local + release-time baseline) is the v1 model, and a goreleaser hook that produces the signed baseline is the next step. Verdict cache poisoning, compromised LLM provider CLIs, SSRF via plugin git URLs.
 
 Report vulnerabilities via GitHub Security Advisories on this repo.
 
@@ -572,7 +578,7 @@ Releases stamp the version via ldflags so each binary reports it through `--vers
 go build -ldflags '-X github.com/Maxlemore97/watchdog/internal/version.Version=v0.5.0' ./...
 ```
 
-Unstamped builds report `dev`.
+Unstamped builds report `dev`. Release builds may additionally stamp `internal/integrity.BaselinePubKey` with a base64 Ed25519 verifier public key — when set, every binary checks `~/.watchdog/baseline.json` against its release signature and reports drift via `BASELINE_BINARY_DRIFT`. Unstamped builds skip baseline verification silently.
 
 ---
 
