@@ -8,19 +8,22 @@ import (
 	"testing"
 )
 
-// fakeHost lets us drive the mcpServersHost logic with a controllable
+// fakeHost lets us drive the schemaHost logic with a controllable
 // config path in tests, without depending on the real OS-specific
 // path for Claude Desktop or Cursor.
-func fakeHost(t *testing.T, name string) *mcpServersHost {
+func fakeHost(t *testing.T, name string) *schemaHost {
 	t.Helper()
 	dir := t.TempDir()
 	// Pre-create the config dir so Exists() returns true.
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	return &mcpServersHost{
+	return &schemaHost{
 		name:       name,
 		configPath: filepath.Join(dir, "config.json"),
+		serverKey:  "mcpServers",
+		format:     formatJSON,
+		entryShape: standardMCPEntry,
 	}
 }
 
@@ -32,9 +35,12 @@ func TestExists_TrueWhenConfigDirPresent(t *testing.T) {
 }
 
 func TestExists_FalseWhenNoDir(t *testing.T) {
-	h := &mcpServersHost{
+	h := &schemaHost{
 		name:       "fake",
 		configPath: "/nonexistent/path/config.json",
+		serverKey:  "mcpServers",
+		format:     formatJSON,
+		entryShape: standardMCPEntry,
 	}
 	if h.Exists() {
 		t.Errorf("Exists should be false for missing parent dir")
@@ -218,8 +224,16 @@ func TestAll_ListsKnownHosts(t *testing.T) {
 	for _, h := range got {
 		names = append(names, h.Name())
 	}
-	want := []string{"claude-desktop", "cursor"}
+	want := []string{"claude-desktop", "cursor", "continue", "cline", "zed"}
 	if !reflect.DeepEqual(names, want) {
 		t.Errorf("All names = %v, want %v", names, want)
+	}
+}
+
+func TestByName_NewHosts(t *testing.T) {
+	for _, name := range []string{"continue", "cline", "zed"} {
+		if h := ByName(name); h == nil || h.Name() != name {
+			t.Errorf("ByName(%q) = %v", name, h)
+		}
 	}
 }

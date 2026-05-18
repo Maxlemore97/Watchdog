@@ -14,11 +14,14 @@ import (
 //	         (defaults to ~/.config/Claude/…)
 //	Windows: %APPDATA%/Claude/claude_desktop_config.json
 //
-// The schema is `mcpServers` so this delegates to mcpServersHost.
+// Schema is the standard `mcpServers` JSON.
 func NewClaudeDesktop() Host {
-	return &mcpServersHost{
+	return &schemaHost{
 		name:       "claude-desktop",
 		configPath: claudeDesktopConfigPath(),
+		serverKey:  "mcpServers",
+		format:     formatJSON,
+		entryShape: standardMCPEntry,
 	}
 }
 

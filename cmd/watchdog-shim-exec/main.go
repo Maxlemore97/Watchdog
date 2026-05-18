@@ -18,6 +18,7 @@ import (
 	"strings"
 
 	"github.com/Maxlemore97/watchdog/internal/audit"
+	"github.com/Maxlemore97/watchdog/internal/cli"
 	"github.com/Maxlemore97/watchdog/internal/config"
 	"github.com/Maxlemore97/watchdog/internal/decisions"
 	"github.com/Maxlemore97/watchdog/internal/integrity"
@@ -72,14 +73,6 @@ func confirmTTY(reason string) bool {
 	return a == "y" || a == "yes"
 }
 
-func isTTY(f *os.File) bool {
-	st, err := f.Stat()
-	if err != nil {
-		return false
-	}
-	return st.Mode()&os.ModeCharDevice != 0
-}
-
 func resolveDecision(verdict, reason string) bool {
 	switch verdict {
 	case "allow":
@@ -89,7 +82,7 @@ func resolveDecision(verdict, reason string) bool {
 		return false
 	}
 	// ask
-	if isTTY(os.Stdin) && isTTY(os.Stderr) {
+	if cli.IsTerminal(os.Stdin) && cli.IsTerminal(os.Stderr) {
 		return confirmTTY(reason)
 	}
 	fallback := failClosedVerdict()
@@ -130,7 +123,7 @@ func main() {
 	// some installs may resolve to the real binary directly,
 	// bypassing watchdog. Warn once per invocation, only on a TTY so
 	// CI logs don't get noisy.
-	if isTTY(os.Stderr) && !shim.IsShimDirFirstOnPath(shimDir()) {
+	if cli.IsTerminal(os.Stderr) && !shim.IsShimDirFirstOnPath(shimDir()) {
 		fmt.Fprintln(os.Stderr,
 			"watchdog: WARNING — shim dir not first on PATH; installs may bypass scanning. Run `watchdog-shim doctor` for the fix.")
 	}

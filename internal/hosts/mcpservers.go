@@ -6,41 +6,67 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
+
+	"gopkg.in/yaml.v3"
 )
 
-// EntryName is the key under `mcpServers` we own. Stable so
+// EntryName is the key under the host's server map we own. Stable so
 // unregister can find it.
 const EntryName = "watchdog"
 
-// mcpServersHost is the shared implementation for hosts whose config
-// has the JSON shape:
-//
-//	{ "mcpServers": { "<name>": { "command": "...", "args": [...] } } }
-//
-// Used by Claude Desktop, Cursor, and any future host that adopts
-// the same schema.
-type mcpServersHost struct {
-	name       string
-	configPath string
+// configFormat selects on-disk encoding. Most hosts are JSON; Continue's
+// newer setups use YAML. Both round-trip through map[string]any.
+type configFormat int
+
+const (
+	formatJSON configFormat = iota
+	formatYAML
+)
+
+// entryBuilder returns the value to store under the host's server map
+// at key=EntryName. Different hosts demand different shapes — Claude
+// Desktop / Cursor / Cline want {command, args}; Zed wants
+// {source, command:{path, args}}.
+type entryBuilder func(execPath string) any
+
+// standardMCPEntry is the canonical {command, args} shape used by
+// every host that follows the mcpServers convention.
+func standardMCPEntry(execPath string) any {
+	return map[string]any{
+		"command": execPath,
+		"args":    []string{},
+	}
 }
 
-func (h *mcpServersHost) Name() string       { return h.name }
-func (h *mcpServersHost) ConfigPath() string { return h.configPath }
+// schemaHost implements Host for any single-key on-disk config —
+// {<serverKey>: {<EntryName>: <entry>}}. Hosts differ only by
+// configPath, serverKey, format, and entry shape.
+type schemaHost struct {
+	name       string
+	configPath string
+	serverKey  string
+	format     configFormat
+	entryShape entryBuilder
+}
+
+func (h *schemaHost) Name() string       { return h.name }
+func (h *schemaHost) ConfigPath() string { return h.configPath }
 
 // Exists treats the config-file's parent directory as the install
 // signal — the dir is created by the host app on first launch. A
 // missing config file inside an existing dir is OK; Register will
 // create the file.
-func (h *mcpServersHost) Exists() bool {
+func (h *schemaHost) Exists() bool {
 	dir := filepath.Dir(h.configPath)
 	st, err := os.Stat(dir)
 	return err == nil && st.IsDir()
 }
 
 // IsRegistered reports whether the watchdog entry already lives in
-// the config's `mcpServers` map. Safe to call when the file doesn't
-// exist (returns false).
-func (h *mcpServersHost) IsRegistered() bool {
+// the config's server map. Safe to call when the file doesn't exist
+// (returns false).
+func (h *schemaHost) IsRegistered() bool {
 	servers, err := h.loadServers()
 	if err != nil {
 		return false
@@ -49,13 +75,13 @@ func (h *mcpServersHost) IsRegistered() bool {
 	return ok
 }
 
-// Register adds (or replaces) the watchdog entry in mcpServers and
+// Register adds (or replaces) the watchdog entry under serverKey and
 // writes the config atomically. Creates the config file if missing.
 //
-// execPath should be an absolute path to the watchdog-mcp binary,
-// so registration survives PATH changes. Caller is responsible for
+// execPath should be an absolute path to the watchdog-mcp binary, so
+// registration survives PATH changes. Caller is responsible for
 // supplying it (the cmd layer resolves via exec.LookPath).
-func (h *mcpServersHost) Register(execPath string) error {
+func (h *schemaHost) Register(execPath string) error {
 	if execPath == "" {
 		return errors.New("hosts: empty execPath")
 	}
@@ -68,31 +94,29 @@ func (h *mcpServersHost) Register(execPath string) error {
 		}
 		cfg = map[string]any{}
 	}
-	servers, _ := cfg["mcpServers"].(map[string]any)
+	servers, _ := cfg[h.serverKey].(map[string]any)
 	if servers == nil {
 		servers = map[string]any{}
 	}
-	servers[EntryName] = map[string]any{
-		"command": execPath,
-		"args":    []string{},
+	build := h.entryShape
+	if build == nil {
+		build = standardMCPEntry
 	}
-	cfg["mcpServers"] = servers
+	servers[EntryName] = build(execPath)
+	cfg[h.serverKey] = servers
 	return h.saveConfig(cfg)
 }
 
-// Unregister removes the watchdog entry from mcpServers. If the
-// config doesn't exist, or the entry isn't present, returns nil (op
-// is idempotent).
-func (h *mcpServersHost) Unregister() error {
+// Unregister removes the watchdog entry from serverKey. Idempotent.
+func (h *schemaHost) Unregister() error {
 	cfg, err := h.loadConfig()
 	if err != nil {
-		// File doesn't exist → nothing to unregister.
 		if os.IsNotExist(err) {
 			return nil
 		}
 		return err
 	}
-	servers, _ := cfg["mcpServers"].(map[string]any)
+	servers, _ := cfg[h.serverKey].(map[string]any)
 	if servers == nil {
 		return nil
 	}
@@ -100,14 +124,11 @@ func (h *mcpServersHost) Unregister() error {
 		return nil
 	}
 	delete(servers, EntryName)
-	cfg["mcpServers"] = servers
+	cfg[h.serverKey] = servers
 	return h.saveConfig(cfg)
 }
 
-// loadServers returns just the mcpServers map; useful for read-only
-// inspection. Returns empty map and nil error when the file doesn't
-// exist (read-only callers shouldn't care).
-func (h *mcpServersHost) loadServers() (map[string]any, error) {
+func (h *schemaHost) loadServers() (map[string]any, error) {
 	cfg, err := h.loadConfig()
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -115,22 +136,23 @@ func (h *mcpServersHost) loadServers() (map[string]any, error) {
 		}
 		return nil, err
 	}
-	servers, _ := cfg["mcpServers"].(map[string]any)
+	servers, _ := cfg[h.serverKey].(map[string]any)
 	if servers == nil {
 		return map[string]any{}, nil
 	}
 	return servers, nil
 }
 
-// loadConfig reads the JSON config file. Returns os.IsNotExist when
-// the file is missing so callers can distinguish.
-func (h *mcpServersHost) loadConfig() (map[string]any, error) {
+// loadConfig reads and decodes the config file in whichever format
+// the host uses. Returns os.IsNotExist on missing file so callers
+// can distinguish.
+func (h *schemaHost) loadConfig() (map[string]any, error) {
 	data, err := os.ReadFile(h.configPath)
 	if err != nil {
 		return nil, err
 	}
-	var cfg map[string]any
-	if err := json.Unmarshal(data, &cfg); err != nil {
+	cfg, err := decodeConfig(data, h.format)
+	if err != nil {
 		return nil, err
 	}
 	if cfg == nil {
@@ -140,17 +162,15 @@ func (h *mcpServersHost) loadConfig() (map[string]any, error) {
 }
 
 // saveConfig atomically writes cfg to h.configPath via temp + rename.
-// Creates the parent dir if missing. Preserves 0o644 perms.
-func (h *mcpServersHost) saveConfig(cfg map[string]any) error {
+// Creates the parent dir if missing.
+func (h *schemaHost) saveConfig(cfg map[string]any) error {
 	if err := os.MkdirAll(filepath.Dir(h.configPath), 0o755); err != nil {
 		return err
 	}
-	data, err := json.MarshalIndent(cfg, "", "  ")
+	data, err := encodeConfig(cfg, h.format)
 	if err != nil {
 		return err
 	}
-	// Trailing newline matches host-app conventions.
-	data = append(data, '\n')
 	tmp := h.configPath + "." + strconv.Itoa(os.Getpid()) + ".tmp"
 	if err := os.WriteFile(tmp, data, 0o644); err != nil {
 		return err
@@ -160,4 +180,86 @@ func (h *mcpServersHost) saveConfig(cfg map[string]any) error {
 		return err
 	}
 	return nil
+}
+
+// decodeConfig parses raw bytes into a generic map. YAML's decoder
+// emits map[interface{}]interface{} for nested maps; we recursively
+// normalize to map[string]any so the rest of the package can treat
+// every host uniformly.
+func decodeConfig(data []byte, fmt configFormat) (map[string]any, error) {
+	switch fmt {
+	case formatYAML:
+		var raw any
+		if err := yaml.Unmarshal(data, &raw); err != nil {
+			return nil, err
+		}
+		v := normalizeYAML(raw)
+		m, _ := v.(map[string]any)
+		return m, nil
+	default:
+		var cfg map[string]any
+		if err := json.Unmarshal(data, &cfg); err != nil {
+			return nil, err
+		}
+		return cfg, nil
+	}
+}
+
+// encodeConfig serializes cfg in whichever format the host uses. JSON
+// gets a 2-space indent + trailing newline; YAML gets yaml.v3's
+// default 4-space block style.
+func encodeConfig(cfg map[string]any, fmt configFormat) ([]byte, error) {
+	switch fmt {
+	case formatYAML:
+		data, err := yaml.Marshal(cfg)
+		if err != nil {
+			return nil, err
+		}
+		return data, nil
+	default:
+		data, err := json.MarshalIndent(cfg, "", "  ")
+		if err != nil {
+			return nil, err
+		}
+		return append(data, '\n'), nil
+	}
+}
+
+// normalizeYAML walks the YAML decoder's output and converts every
+// map[interface{}]interface{} into map[string]any so JSON-style
+// downstream code works without per-type branching.
+func normalizeYAML(v any) any {
+	switch x := v.(type) {
+	case map[any]any:
+		out := make(map[string]any, len(x))
+		for k, val := range x {
+			ks, ok := k.(string)
+			if !ok {
+				continue
+			}
+			out[ks] = normalizeYAML(val)
+		}
+		return out
+	case map[string]any:
+		for k, val := range x {
+			x[k] = normalizeYAML(val)
+		}
+		return x
+	case []any:
+		for i, item := range x {
+			x[i] = normalizeYAML(item)
+		}
+		return x
+	}
+	return v
+}
+
+// formatForPath chooses an encoder based on filename extension. Used
+// by hosts whose config can be either JSON or YAML (Continue).
+func formatForPath(path string) configFormat {
+	ext := strings.ToLower(filepath.Ext(path))
+	if ext == ".yaml" || ext == ".yml" {
+		return formatYAML
+	}
+	return formatJSON
 }

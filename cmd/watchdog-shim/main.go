@@ -3,6 +3,7 @@
 package main
 
 import (
+	"bufio"
 	"flag"
 	"fmt"
 	"io"
@@ -14,6 +15,7 @@ import (
 	"time"
 
 	"github.com/Maxlemore97/watchdog/internal/audit"
+	"github.com/Maxlemore97/watchdog/internal/cli"
 	"github.com/Maxlemore97/watchdog/internal/hosts"
 	"github.com/Maxlemore97/watchdog/internal/integrity"
 	"github.com/Maxlemore97/watchdog/internal/paths"
@@ -64,6 +66,31 @@ func main() {
 	}
 }
 
+type installFlags struct {
+	dir        string
+	overwrite  bool
+	register   bool // explicit --register / -y
+	noRegister bool // explicit --no-register
+}
+
+func parseInstallFlags(args []string) installFlags {
+	fs := flag.NewFlagSet("install", flag.ExitOnError)
+	dirFlag := fs.String("dir", "", "shim directory (default: ~/.watchdog/bin)")
+	noOverwrite := fs.Bool("no-overwrite", false, "skip tools that already have a shim")
+	register := fs.Bool("register", false, "auto-register with every detected MCP host (no prompt)")
+	noRegister := fs.Bool("no-register", false, "skip the post-install host-registration prompt")
+	yes := fs.Bool("y", false, "alias for --register")
+	_ = fs.Parse(args)
+	return installFlags{
+		dir:        *dirFlag,
+		overwrite:  !*noOverwrite,
+		register:   *register || *yes,
+		noRegister: *noRegister,
+	}
+}
+
+// parseDir keeps backwards-compat for uninstall/status/cache which
+// only consume the --dir / --no-overwrite pair.
 func parseDir(args []string) (dir string, overwrite bool, rest []string) {
 	fs := flag.NewFlagSet("dir", flag.ExitOnError)
 	dirFlag := fs.String("dir", "", "shim directory (default: ~/.watchdog/bin)")
@@ -76,14 +103,14 @@ func parseDir(args []string) (dir string, overwrite bool, rest []string) {
 }
 
 func cmdInstall(args []string) int {
-	dir, overwrite, _ := parseDir(args)
-	target := dir
+	f := parseInstallFlags(args)
+	target := f.dir
 	if target == "" {
 		target = shim.DefaultShimDir()
 	}
 	written, err := shim.Install(shim.InstallOpts{
-		ShimDir:   dir,
-		Overwrite: overwrite,
+		ShimDir:   f.dir,
+		Overwrite: f.overwrite,
 	})
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "install failed: %v\n", err)
@@ -113,6 +140,8 @@ func cmdInstall(args []string) int {
 		fmt.Printf("  manifest %s\n", paths.ManifestPath())
 	}
 
+	maybeRegisterHosts(f)
+
 	fmt.Println()
 	fmt.Println("Add this directory to the FRONT of your PATH:")
 	if runtime.GOOS == "windows" {
@@ -123,6 +152,81 @@ func cmdInstall(args []string) int {
 		fmt.Println("Then restart your shell or `source` your rc file.")
 	}
 	return 0
+}
+
+// maybeRegisterHosts runs the post-install host-registration flow.
+// Behaviour:
+//   - --no-register: do nothing
+//   - --register / -y: register every detected & unregistered host
+//   - else if stdin is a TTY: prompt
+//   - else: print a one-line hint, no prompt (non-interactive install
+//     contexts like CI don't hang)
+//
+// When the list of pending hosts is empty, nothing prints. Audit:
+// `install.registered_via_prompt` or `install.register_skipped`.
+func maybeRegisterHosts(f installFlags) {
+	if f.noRegister {
+		audit.Record("install.register_skipped", map[string]any{"reason": "flag"})
+		return
+	}
+	pending := []hosts.Host{}
+	for _, h := range hosts.Detect() {
+		if !h.IsRegistered() {
+			pending = append(pending, h)
+		}
+	}
+	if len(pending) == 0 {
+		return
+	}
+	execPath := resolveMCPExec()
+	if execPath == "" {
+		fmt.Fprintln(os.Stderr, "watchdog-mcp binary not found; skipping host registration. Run `watchdog-shim register --all` once it's on PATH.")
+		return
+	}
+
+	names := []string{}
+	for _, h := range pending {
+		names = append(names, h.Name())
+	}
+	listStr := strings.Join(names, ", ")
+
+	approve := f.register
+	if !approve && cli.IsTerminal(os.Stdin) {
+		fmt.Printf("\nDetected MCP-aware host(s) not yet registered: %s\n", listStr)
+		fmt.Print("Register watchdog-mcp with each? [Y/n] ")
+		reader := bufio.NewReader(os.Stdin)
+		ans, err := reader.ReadString('\n')
+		if err == nil {
+			a := strings.ToLower(strings.TrimSpace(ans))
+			approve = a == "" || a == "y" || a == "yes"
+		}
+	} else if !approve {
+		// Non-interactive context with no flag: print the hint and bail.
+		fmt.Printf("\nDetected unregistered MCP host(s): %s. To wire them up, run:\n  watchdog-shim register --all\n",
+			listStr)
+		audit.Record("install.register_skipped", map[string]any{"reason": "non_tty", "pending": names})
+		return
+	}
+	if !approve {
+		audit.Record("install.register_skipped", map[string]any{"reason": "declined", "pending": names})
+		return
+	}
+
+	registered := []string{}
+	for _, h := range pending {
+		if err := h.Register(execPath); err != nil {
+			fmt.Fprintf(os.Stderr, "register %s: %v\n", h.Name(), err)
+			continue
+		}
+		registered = append(registered, h.Name())
+		fmt.Printf("  registered %s (%s)\n", h.Name(), h.ConfigPath())
+	}
+	if len(registered) > 0 {
+		audit.Record("install.registered_via_prompt", map[string]any{
+			"hosts":     registered,
+			"exec_path": execPath,
+		})
+	}
 }
 
 func cmdUninstall(args []string) int {

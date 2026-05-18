@@ -47,6 +47,9 @@ func All() []Host {
 	return []Host{
 		NewClaudeDesktop(),
 		NewCursor(),
+		NewContinue(),
+		NewCline(),
+		NewZed(),
 	}
 }
 
