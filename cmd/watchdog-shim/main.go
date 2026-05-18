@@ -22,6 +22,7 @@ func usage() {
 watchdog-shim uninstall [--dir DIR]
 watchdog-shim status    [--dir DIR]
 watchdog-shim doctor
+watchdog-shim cache     stats | clear [--type=llm|osv|all] [--older-than=DUR] [--dry-run]
 watchdog-shim --version`)
 }
 
@@ -44,6 +45,8 @@ func main() {
 		os.Exit(cmdStatus(rest))
 	case "doctor":
 		os.Exit(cmdDoctor(rest))
+	case "cache":
+		os.Exit(cmdCache(rest))
 	default:
 		usage()
 		os.Exit(2)

@@ -130,6 +130,17 @@ watchdog-shim status   # per-tool install state
 
 To remove later: `watchdog-shim uninstall`. It only deletes scripts that carry the `Watchdog shim` marker, so your own binaries are untouched.
 
+If a cached verdict turns out to be wrong, you can inspect and prune the cache:
+
+```bash
+watchdog-shim cache stats                                  # counts + size, broken down by kind
+watchdog-shim cache clear --type=llm --dry-run             # preview what would go
+watchdog-shim cache clear --type=llm --older-than=24h      # drop stale LLM verdicts, keep OSV
+watchdog-shim cache clear --type=all                       # nuke everything except the ledger
+```
+
+`--type` is one of `llm`, `osv`, `all`. The persistent vetted-plugins ledger (`vetted_plugins.json`) is always preserved; delete it by hand if you really want it gone.
+
 ---
 
 ## LLM providers
