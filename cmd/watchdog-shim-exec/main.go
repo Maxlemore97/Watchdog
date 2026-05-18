@@ -16,7 +16,9 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/Maxlemore97/watchdog/internal/audit"
 	"github.com/Maxlemore97/watchdog/internal/config"
+	"github.com/Maxlemore97/watchdog/internal/integrity"
 	"github.com/Maxlemore97/watchdog/internal/osv"
 	"github.com/Maxlemore97/watchdog/internal/parsers"
 	"github.com/Maxlemore97/watchdog/internal/preflight"
@@ -147,6 +149,24 @@ func main() {
 		os.Exit(execReal(real, toolname, toolArgs))
 	}
 
+	// Integrity gate. The shim only ever sees install-shaped invocations
+	// here, so any verified failure should fail-closed. ManifestMissing
+	// is treated as back-compat (no `watchdog-shim install` was ever
+	// run) and falls through to the regular preflight.
+	st := integrity.Verify()
+	if !st.OK && !st.Disabled && !st.ManifestMissing {
+		audit.Record("integrity.deny", map[string]any{
+			"tool":     "shim-exec",
+			"binary":   toolname,
+			"reason":   "integrity_failed",
+			"failures": st.Failures,
+		})
+		fmt.Fprintf(os.Stderr,
+			"watchdog: integrity check failed (%s) — refusing install. Run `watchdog-shim doctor` to diagnose.\n",
+			st.FirstReason())
+		os.Exit(1)
+	}
+
 	result := preflight.Packages(pkgs, notes, preflight.Options{
 		Mode:              mode(),
 		FailClosedVerdict: failClosedVerdict(),
@@ -156,4 +176,3 @@ func main() {
 	}
 	os.Exit(1)
 }
-

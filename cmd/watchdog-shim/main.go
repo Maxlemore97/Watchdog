@@ -13,6 +13,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Maxlemore97/watchdog/internal/audit"
+	"github.com/Maxlemore97/watchdog/internal/integrity"
 	"github.com/Maxlemore97/watchdog/internal/paths"
 	"github.com/Maxlemore97/watchdog/internal/providers"
 	"github.com/Maxlemore97/watchdog/internal/shim"
@@ -85,6 +87,26 @@ func cmdInstall(args []string) int {
 	for _, p := range written {
 		fmt.Printf("  %s\n", filepath.Base(p))
 	}
+
+	// Snapshot the install state into ~/.watchdog/manifest.json. Every
+	// hot-path entry point (pretool, shim-exec, session, mcp) verifies
+	// against this. A missing manifest is treated as "no integrity
+	// enforcement" — back-compat for manually-installed setups — so
+	// failure here is a warning, not a fatal error.
+	m, mErr := integrity.Build()
+	if mErr != nil {
+		fmt.Fprintf(os.Stderr, "warning: could not build integrity manifest: %v\n", mErr)
+	} else if wErr := integrity.WriteManifest(m); wErr != nil {
+		fmt.Fprintf(os.Stderr, "warning: could not write integrity manifest: %v\n", wErr)
+	} else {
+		audit.Record("manifest.written", map[string]any{
+			"shim_dir":     m.ShimDir,
+			"binary_count": len(m.Binaries),
+			"shim_count":   len(m.Shims),
+		})
+		fmt.Printf("  manifest %s\n", paths.ManifestPath())
+	}
+
 	fmt.Println()
 	fmt.Println("Add this directory to the FRONT of your PATH:")
 	if runtime.GOOS == "windows" {
@@ -111,6 +133,17 @@ func cmdUninstall(args []string) int {
 	fmt.Printf("Removed %d shims from %s\n", len(removed), target)
 	for _, p := range removed {
 		fmt.Printf("  %s\n", filepath.Base(p))
+	}
+	// Remove the manifest so subsequent hook invocations see "clean
+	// uninstall" and fail-open. Without this, hook wrappers would
+	// detect a missing binary alongside a present manifest and
+	// fail-closed for install commands — wrong for a deliberate
+	// uninstall.
+	if err := os.Remove(paths.ManifestPath()); err == nil {
+		fmt.Printf("Removed manifest %s\n", paths.ManifestPath())
+		audit.Record("manifest.removed", map[string]any{
+			"path": paths.ManifestPath(),
+		})
 	}
 	return 0
 }
@@ -195,6 +228,28 @@ func cmdDoctor(args []string) int {
 		} else {
 			_ = os.Remove(probe)
 			fmt.Printf("  ok  cache dir writable (%s)\n", paths.CacheDir())
+		}
+	}
+
+	// 5. integrity manifest — verify against installed state.
+	st := integrity.VerifyDeep()
+	switch {
+	case st.Disabled:
+		fmt.Println("  --  integrity check skipped: WATCHDOG_DISABLE is set")
+	case st.OK:
+		fmt.Printf("  ok  integrity manifest matches (%s)\n", paths.ManifestPath())
+	case st.ManifestMissing:
+		fmt.Printf("  warn no integrity manifest at %s — run `watchdog-shim install` to create one\n",
+			paths.ManifestPath())
+	default:
+		fmt.Printf("  fail integrity check failed (%d issue(s)):\n", len(st.Failures))
+		for _, f := range st.Failures {
+			where := f.Path
+			if where == "" {
+				where = "—"
+			}
+			fmt.Printf("       %s  %s\n", f.Code, f.Detail)
+			fmt.Printf("         path: %s\n", where)
 		}
 	}
 	return 0
