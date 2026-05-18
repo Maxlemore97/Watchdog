@@ -5,11 +5,13 @@ package main
 import (
 	"flag"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
+	"time"
 
 	"github.com/Maxlemore97/watchdog/internal/paths"
 	"github.com/Maxlemore97/watchdog/internal/providers"
@@ -22,6 +24,7 @@ func usage() {
 watchdog-shim uninstall [--dir DIR]
 watchdog-shim status    [--dir DIR]
 watchdog-shim doctor
+watchdog-shim doctor    [--llm-smoke] [--llm-smoke-timeout=DUR]
 watchdog-shim cache     stats | clear [--type=llm|osv|all] [--older-than=DUR] [--dry-run]
 watchdog-shim --version`)
 }
@@ -134,7 +137,15 @@ func cmdStatus(args []string) int {
 // cmdDoctor checks the user's environment for the most common
 // install-time problems.
 func cmdDoctor(args []string) int {
-	_ = args
+	fs := flag.NewFlagSet("doctor", flag.ContinueOnError)
+	fs.SetOutput(os.Stderr)
+	smoke := fs.Bool("llm-smoke", false,
+		"send a tiny prompt to the detected LLM CLI (costs a few tokens)")
+	smokeTimeout := fs.Duration("llm-smoke-timeout", 5*time.Second,
+		"how long to wait for the smoke response")
+	if err := fs.Parse(args); err != nil {
+		return 2
+	}
 	target := shim.DefaultShimDir()
 	if v := os.Getenv("WATCHDOG_SHIM_DIR"); v != "" {
 		target = v
@@ -161,10 +172,17 @@ func cmdDoctor(args []string) int {
 	}
 
 	// 3. at least one LLM CLI on PATH
-	if _, err := providers.ResolveProvider(); err == nil {
+	prov, provErr := providers.ResolveProvider()
+	if provErr == nil {
 		fmt.Println("  ok  at least one LLM provider CLI on PATH")
+		if *smoke {
+			runLLMSmoke(os.Stdout, prov, *smokeTimeout, prov.Invoke)
+		}
 	} else {
 		fmt.Println("  warn no LLM provider CLI on PATH (claude/gemini/openai/ollama) — analyzer falls back to OSV-only")
+		if *smoke {
+			fmt.Println("  --  llm smoke skipped: no provider resolved")
+		}
 	}
 
 	// 4. cache dir writable
@@ -180,6 +198,41 @@ func cmdDoctor(args []string) int {
 		}
 	}
 	return 0
+}
+
+// invokeFn is the subset of provider.Invoke that the smoke runner
+// needs. Pulled out so tests can swap in a stub instead of shelling
+// out to a real LLM CLI.
+type invokeFn func(prompt string, cfg providers.Config) (string, error)
+
+// runLLMSmoke sends a one-token challenge to the resolved provider
+// and reports ok/warn/fail to w. AppendSystem is cleared so the call
+// doesn't drag in the full analyzer system prompt — the goal is to
+// prove the CLI authenticates and responds, not to scan anything.
+func runLLMSmoke(w io.Writer, prov providers.Provider, timeout time.Duration, invoke invokeFn) {
+	cfg := providers.BuildConfig(prov, "")
+	cfg.Timeout = timeout
+	cfg.AppendSystem = false
+
+	start := time.Now()
+	output, err := invoke("Respond with the four-letter token PING and nothing else.", cfg)
+	elapsed := time.Since(start).Round(time.Millisecond)
+
+	if err != nil {
+		msg := err.Error()
+		if len(msg) > 200 {
+			msg = msg[:200] + "…"
+		}
+		fmt.Fprintf(w, "  fail %s smoke test failed in %s: %s\n", prov.Name, elapsed, msg)
+		return
+	}
+	if !strings.Contains(strings.ToUpper(output), "PING") {
+		fmt.Fprintf(w, "  warn %s responded in %s but output didn't include the PING marker (model=%s)\n",
+			prov.Name, elapsed, cfg.Model)
+		return
+	}
+	fmt.Fprintf(w, "  ok  %s smoke test passed in %s (model=%s)\n",
+		prov.Name, elapsed, cfg.Model)
 }
 
 func samePath(a, b string) bool {

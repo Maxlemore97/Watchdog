@@ -59,6 +59,13 @@ watchdog-shim doctor:
 
 If `doctor` warns that no LLM provider CLI is on PATH, that's fine. Watchdog will still run OSV checks; the LLM review just gets skipped. Install `claude`, `gemini`, `openai`, or `ollama` if you want it back (see [LLM providers](#llm-providers)).
 
+`doctor` only checks that the CLI is on PATH, not that it actually answers. If you suspect a broken setup (expired auth, exhausted quota, model name typo), add `--llm-smoke` to send a one-token challenge:
+
+```bash
+watchdog-shim doctor --llm-smoke                  # 5s timeout, costs ~10 tokens
+watchdog-shim doctor --llm-smoke --llm-smoke-timeout=15s
+```
+
 ---
 
 ## Install
