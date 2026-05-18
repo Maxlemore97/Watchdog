@@ -55,7 +55,11 @@ watchdog-shim doctor:
   ok  watchdog-shim-exec found on PATH
   ok  at least one LLM provider CLI on PATH
   ok  cache dir writable (/home/you/.cache/watchdog)
+  ok  integrity manifest matches (/home/you/.watchdog/manifest.json)
+  warn cursor detected but not registered — run `watchdog-shim register --host=cursor`
 ```
+
+`doctor` is the single source of truth across every layer: PATH, the shim binaries, the integrity manifest (see [Tamper resistance](#tamper-resistance)), and any MCP-aware host you have installed. Run it after install and any time something looks off.
 
 If `doctor` warns that no LLM provider CLI is on PATH, that's fine. Watchdog will still run OSV checks; the LLM review just gets skipped. Install `claude`, `gemini`, `openai`, or `ollama` if you want it back (see [LLM providers](#llm-providers)).
 
@@ -112,7 +116,9 @@ The shims are PATH-prepend wrappers for `npm`, `pip`, `pip3`, `pnpm`, `yarn`, `b
 watchdog-shim install
 ```
 
-Writes eleven wrapper scripts into `~/.watchdog/bin/` (or `%USERPROFILE%\.watchdog\bin` on Windows) and prints the PATH line you need to add. The shim dir has to be **first** on your PATH; otherwise the shell finds the real binary directly and the check never runs.
+Writes eleven wrapper scripts into `~/.watchdog/bin/` (or `%USERPROFILE%\.watchdog\bin` on Windows), records an integrity manifest at `~/.watchdog/manifest.json`, and prints the PATH line you need to add. The shim dir has to be **first** on your PATH; otherwise the shell finds the real binary directly and the check never runs.
+
+The manifest records sha256 hashes of every Watchdog binary and shim wrapper at install time. Hot paths (the PreToolUse hook, the shim, MCP `watchdog_health`) verify against it on every invocation — see [Tamper resistance](#tamper-resistance).
 
 Linux / macOS, bash or zsh:
 
@@ -135,7 +141,7 @@ watchdog-shim doctor
 watchdog-shim status   # per-tool install state
 ```
 
-To remove later: `watchdog-shim uninstall`. It only deletes scripts that carry the `Watchdog shim` marker, so your own binaries are untouched.
+To remove later: `watchdog-shim uninstall`. It only deletes scripts that carry the `Watchdog shim` marker (so your own binaries are untouched) and removes the manifest so the hook fallback correctly distinguishes a clean uninstall from a tamper.
 
 If a cached verdict turns out to be wrong, you can inspect and prune the cache:
 
@@ -249,6 +255,32 @@ Fail-closed at every step. OSV unreachable returns `ask` (or `deny` from the shi
 
 ---
 
+## Tamper resistance
+
+The shim and the Claude Code hooks intercept by being on PATH and registered in plugin config. An adversarial agent that can edit files can try to bypass them — delete the binary, rewrite PATH, edit `~/.claude/settings.json`. Watchdog's job is to make every such attempt either visible (audit log) or denied at the next request.
+
+**Integrity manifest.** `watchdog-shim install` snapshots the hashes of every Watchdog binary and shim wrapper into `~/.watchdog/manifest.json`. Hot paths verify against it on every call:
+
+- `watchdog-pretool` denies install-shaped Bash when the manifest mismatch — and emits `additionalContext` to the agent for non-install commands so the degraded state is visible.
+- `watchdog-shim-exec` denies installs on integrity failure (belt-and-suspenders if the hook was bypassed).
+- `watchdog-shim doctor` reports the full state.
+- The MCP `watchdog_health` tool exposes the same status to MCP-aware agents.
+
+The hook wrappers (`hooks/*.sh`) are manifest-aware. If the watchdog binary is missing AND the manifest exists, that's tamper — install-shaped Bash gets denied. If both are absent, that's a clean uninstall, and the hooks fall through silently.
+
+**Tamper-pattern detection.** `watchdog-pretool` inspects every Bash tool call for signatures of disable/evade attempts: `unset PATH`, `PATH=…` overrides, absolute-path installs (`/opt/homebrew/bin/npm install …`), writes to `~/.claude/settings.json`, `pkill watchdog-*`, `rm -rf ~/.watchdog/`. Any hit returns `deny` and writes an `integrity.deny` event to the audit log.
+
+**Audit log.** Every protective and meta-protective event lands at `~/.watchdog/audit.jsonl` (override via `WATCHDOG_AUDIT_LOG`): manifest writes, integrity denials, tamper-pattern matches, MCP tool start/ok/error/panic/timeout, decision write/consume/expire, host register/unregister. Post-incident `jq` is the forensics tool:
+
+```bash
+jq -c 'select(.event | startswith("integrity") or startswith("tamper"))' \
+   ~/.watchdog/audit.jsonl
+```
+
+**What this gives you.** A filesystem-write adversary can still rewrite both the manifest and the verifier — Watchdog is not signed code. The deterrent is that every tamper step produces an audit-log entry before the chain breaks, and that single-step bypasses (`rm /usr/local/bin/watchdog-pretool`) get caught by the manifest-aware hook fallback. Cryptographic signing is a v2 target; see [Threat model](#threat-model).
+
+---
+
 ## Claude Code plugin
 
 This repo ships a Claude Code plugin (`.claude-plugin/plugin.json` plus hook scripts in `hooks/`) that registers three hooks: `PreToolUse` on Bash, `UserPromptSubmit`, and `SessionStart`.
@@ -268,28 +300,48 @@ Confirm it's wired up by running `/plugin` and looking for `watchdog` in the lis
 
 ## MCP server
 
-`watchdog-mcp` is a stdio MCP server. Six tools:
+`watchdog-mcp` is a stdio MCP server. Seven tools:
 
-| Tool                            | What it does                                            |
-|---------------------------------|---------------------------------------------------------|
-| `watchdog_preflight_install`    | Parse + OSV + (optional) LLM on a full install command  |
-| `watchdog_scan_package`         | LLM source review of one published package              |
-| `watchdog_audit_plugin`         | Audit a plugin git URL or `name@version`                |
-| `watchdog_audit_plugin_local`   | Audit an already-installed plugin directory             |
-| `watchdog_list_vetted_plugins`  | Read the persistent vetted-plugins ledger               |
-| `watchdog_osv_query`            | Raw OSV.dev query, mostly for diagnostics               |
+| Tool                            | What it does                                                     |
+|---------------------------------|------------------------------------------------------------------|
+| `watchdog_preflight_install`    | Parse + OSV + (optional) LLM on a full install command           |
+| `watchdog_scan_package`         | LLM source review of one published package                       |
+| `watchdog_audit_plugin`         | Audit a plugin git URL or `name@version`                         |
+| `watchdog_audit_plugin_local`   | Audit an already-installed plugin directory                      |
+| `watchdog_list_vetted_plugins`  | Read the persistent vetted-plugins ledger                        |
+| `watchdog_osv_query`            | Raw OSV.dev query, mostly for diagnostics                        |
+| `watchdog_health`               | Self-check: version, integrity status, uptime, pending decisions |
 
-Configure in your MCP client (Cursor, Continue, Claude Desktop, etc.):
+Every handler runs under a guard that adds panic recovery, a bounded timeout (`WATCHDOG_MCP_HANDLER_TIMEOUT`, default 60s), and audit-log entries. A panic in any tool returns a structured error rather than killing the server.
+
+Agents using the MCP integration should call `watchdog_health` once at session start and refuse package work if `status != "ok"`. The status surfaces missing-manifest, hash-mismatch, and PATH-misconfiguration in one structured payload.
+
+### Registering the MCP server
+
+The easiest way to wire `watchdog-mcp` into a host is the built-in registration:
+
+```bash
+watchdog-shim register --host=claude-desktop    # or --host=cursor
+watchdog-shim register --all                    # every detected host
+```
+
+This atomically edits the host's `mcpServers` config, adds the `watchdog` entry with an absolute path to the binary, and preserves any other entries you already have. `watchdog-shim unregister` reverses it (also preserving other entries). Detected hosts are listed by `watchdog-shim doctor`.
+
+If you'd rather hand-edit the config, the shape is:
 
 ```json
 {
   "mcpServers": {
-    "watchdog": { "command": "watchdog-mcp" }
+    "watchdog": { "command": "/absolute/path/to/watchdog-mcp" }
   }
 }
 ```
 
-`watchdog-mcp` has to be on the host process's PATH. An absolute path works too: `"command": "/home/you/.local/bin/watchdog-mcp"`.
+Currently supported hosts for auto-registration: Claude Desktop and Cursor. Other MCP-aware hosts (Continue, Cline, Zed) still work — they just need the JSON edited manually.
+
+### MCP↔shim coordination
+
+When an MCP-aware agent calls `watchdog_preflight_install`, the server writes a short-TTL decision token to `~/.watchdog/decisions/` keyed by the exact canonicalized command. If the agent subsequently runs the same install in shell, the shim reads the token and short-circuits to the cached verdict instead of re-running OSV+LLM. The cache key is the literal command, so an `allow` for `lodash` cannot be reused for `lodash-evil`. If the MCP returned `deny`, the shim also denies — even if the agent ignored the MCP response. TTL is 60s, override via `WATCHDOG_DECISION_TTL`.
 
 ---
 
@@ -322,25 +374,29 @@ Inputs: `fail-on` (default `deny`), `model` (override default LLM), `base-ref` (
 
 Everything's an env var. Defaults are sensible; nothing's required.
 
-| Env var                         | Default            | What it does                                                  |
-|---------------------------------|--------------------|---------------------------------------------------------------|
-| `WATCHDOG_MODE`                 | `both`             | `osv` / `claude` / `both`                                     |
-| `WATCHDOG_MIN_SEVERITY`         | `low`              | OSV severity floor (`none`/`low`/`medium`/`high`/`critical`)  |
+| Env var                         | Default                       | What it does                                                                                      |
+|---------------------------------|-------------------------------|---------------------------------------------------------------------------------------------------|
+| `WATCHDOG_MODE`                 | `both`                        | `osv` / `claude` / `both`                                                                         |
+| `WATCHDOG_MIN_SEVERITY`         | `low`                         | OSV severity floor (`none`/`low`/`medium`/`high`/`critical`)                                      |
 | `WATCHDOG_FAILCLOSED_VERDICT`   | `ask` (hooks) / `deny` (shim) | Verdict to emit when a check can't run (OSV unreachable, LLM CLI missing, analyzer panic/timeout) |
-| `WATCHDOG_MAX_PACKAGES`         | `50`               | Above this, return `ask` without scanning                     |
-| `WATCHDOG_LLM_PROVIDER`         | `auto`             | `claude` / `gemini` / `openai` / `ollama` / `generic`         |
-| `WATCHDOG_LLM_MODEL`            | per-provider       | Override the model name                                       |
-| `WATCHDOG_LLM_TIMEOUT`          | `60`               | Per-invocation timeout in seconds                             |
-| `WATCHDOG_LLM_CMD`              | —                  | When provider=`generic`, the CLI to spawn                     |
-| `WATCHDOG_CACHE_DIR`            | `~/.cache/watchdog`| Where verdicts and the ledger live                            |
-| `WATCHDOG_CACHE_TTL`            | `3600`             | OSV cache TTL (seconds)                                       |
-| `WATCHDOG_LLM_CACHE_TTL`        | `86400`            | LLM-verdict cache TTL (seconds)                               |
-| `WATCHDOG_HOOK_BUDGET_SECS`     | `30`               | Wall-clock cap per hook invocation                            |
-| `WATCHDOG_SESSION_MAX_SCANS`    | `10`               | Max plugins re-analyzed per SessionStart                      |
-| `WATCHDOG_ACTION_FAIL_ON`       | `deny`             | `deny` / `ask` / `never` for the GitHub Action exit code      |
-| `WATCHDOG_OSV_ENDPOINT`         | OSV.dev            | Override (http/https only; `file://` is rejected)             |
-| `WATCHDOG_LOG`                  | —                  | If set, JSON-line event log path (see [Events](#events))      |
-| `WATCHDOG_DISABLE`              | —                  | Set to `1` in nested LLM child env to break hook recursion    |
+| `WATCHDOG_MAX_PACKAGES`         | `50`                          | Above this, return `ask` without scanning                                                         |
+| `WATCHDOG_LLM_PROVIDER`         | `auto`                        | `claude` / `gemini` / `openai` / `ollama` / `generic`                                             |
+| `WATCHDOG_LLM_MODEL`            | per-provider                  | Override the model name                                                                           |
+| `WATCHDOG_LLM_TIMEOUT`          | `60`                          | Per-invocation timeout in seconds                                                                 |
+| `WATCHDOG_LLM_CMD`              | —                             | When provider=`generic`, the CLI to spawn                                                         |
+| `WATCHDOG_CACHE_DIR`            | `~/.cache/watchdog`           | Where verdicts and the ledger live                                                                |
+| `WATCHDOG_CACHE_TTL`            | `3600`                        | OSV cache TTL (seconds)                                                                           |
+| `WATCHDOG_LLM_CACHE_TTL`        | `86400`                       | LLM-verdict cache TTL (seconds)                                                                   |
+| `WATCHDOG_HOOK_BUDGET_SECS`     | `30`                          | Wall-clock cap per hook invocation                                                                |
+| `WATCHDOG_SESSION_MAX_SCANS`    | `10`                          | Max plugins re-analyzed per SessionStart                                                          |
+| `WATCHDOG_ACTION_FAIL_ON`       | `deny`                        | `deny` / `ask` / `never` for the GitHub Action exit code                                          |
+| `WATCHDOG_OSV_ENDPOINT`         | OSV.dev                       | Override (http/https only; `file://` is rejected)                                                 |
+| `WATCHDOG_LOG`                  | —                             | If set, JSON-line event log path (see [Events](#events))                                          |
+| `WATCHDOG_DISABLE`              | —                             | Set to `1` in nested LLM child env to break hook recursion                                        |
+| `WATCHDOG_DIR`                  | `~/.watchdog`                 | Where the shim dir, manifest, decisions, and audit log live                                       |
+| `WATCHDOG_AUDIT_LOG`            | `$WATCHDOG_DIR/audit.jsonl`   | Override the tamper / integrity audit log path                                                    |
+| `WATCHDOG_DECISION_TTL`         | `60`                          | MCP→shim decision-token lifetime in seconds                                                       |
+| `WATCHDOG_MCP_HANDLER_TIMEOUT`  | `60`                          | Per-tool ceiling for MCP handlers (seconds)                                                       |
 
 ---
 
@@ -355,6 +411,15 @@ Most useful events:
 - `prefilter_deny` / `prefilter_ask` — when the deterministic regex stage matched.
 - `osv_query_failed` — OSV call failed (network, timeout, etc.).
 - `cache_write_failed` — a verdict cache write didn't land.
+
+The tamper / integrity audit log at `~/.watchdog/audit.jsonl` (separate from `WATCHDOG_LOG`) carries:
+
+- `manifest.written` / `manifest.removed` — install / uninstall.
+- `integrity.deny` — request denied because the integrity check failed or a tamper pattern was hit. Includes `tool`, `command`, and either `patterns` or `failures`.
+- `tamper.suspected` — emitted by the hook wrappers when the binary is missing but the manifest exists.
+- `mcp.tool.start` / `.ok` / `.error` / `.panic` / `.timeout` — one pair per MCP handler invocation.
+- `decision.written` (MCP) / `decision.consumed` (shim) / `.expired` / `.miss` / `.gc` — decision-token cache lifecycle.
+- `host.registered` / `host.unregistered` — `watchdog-shim register` / `unregister`.
 
 Quick budget estimate, given `WATCHDOG_LOG=/tmp/watchdog.jsonl`:
 
@@ -372,6 +437,14 @@ jq -s 'map(select(.event=="analyzer_completed" and .tokens_in))
 
 `watchdog-shim-exec: real binary "npm" not found on PATH`. The shim dir is on PATH but no other entry has `npm` in it. Install Node/npm the normal way; the shim picks it up next call.
 
+`doctor` says `no integrity manifest at …`. You installed via `go install` or another path that didn't run `watchdog-shim install`. Run `watchdog-shim install` to create the manifest. Pre-manifest installs still work, just without tamper detection.
+
+`doctor` says `SHIM_HASH_MISMATCH` or `BINARY_HASH_MISMATCH`. Either you upgraded one binary without re-running `watchdog-shim install`, or something modified files in `~/.watchdog/`. The fix is the same: re-run `watchdog-shim install` to re-snapshot the current state.
+
+`doctor` says `cursor detected but not registered`. Run `watchdog-shim register --host=cursor`. Or `--all` to register against every detected host.
+
+Hook denied with `tamper pattern detected (UNSET_PATH,…)`. Your tool call contains an evade signature (see [Tamper resistance](#tamper-resistance)). Reformulate without unsetting PATH or invoking package managers by absolute path. If the detection is wrong for your case, file an issue.
+
 Claude Code hook fires but the verdict says `watchdog: plugin install detected but analyzer unavailable`. No LLM CLI on PATH. Install one (see [LLM providers](#llm-providers)) or set `WATCHDOG_MODE=osv` to skip the LLM stage.
 
 `go install` reports `package github.com/.../cmd/...: cannot find package`. Run `go version`. You need 1.25+. Older Go can't resolve the wildcard form, so either install each binary individually (`go install github.com/Maxlemore97/watchdog/cmd/watchdog-pretool@latest`) or use the install script.
@@ -386,9 +459,9 @@ Bypass once: `WATCHDOG_DISABLE=1 npm install something`. Short-circuits to a str
 
 Full version with disclosure address: [SECURITY.md](SECURITY.md). Short version:
 
-In scope: prompt injection from fetched artifacts, malicious install commands, supply-chain payloads in published packages, hostile plugin repos, recursive LLM invocation, OSV / registry network failure, DoS via install-command fan-out.
+In scope: prompt injection from fetched artifacts, malicious install commands, supply-chain payloads in published packages, hostile plugin repos, recursive LLM invocation, OSV / registry network failure, DoS via install-command fan-out. Tamper attempts on Watchdog's own state (manifest, binaries, hook config) — detected on the next request and logged to the audit log; see [Tamper resistance](#tamper-resistance).
 
-Out of scope: local filesystem integrity (verdict cache poisoning), compromised LLM provider CLIs, SSRF via plugin git URLs.
+Out of scope: filesystem-write attackers who can also rewrite the verifier (manifest signing is a v2 goal), verdict cache poisoning, compromised LLM provider CLIs, SSRF via plugin git URLs.
 
 Report vulnerabilities via GitHub Security Advisories on this repo.
 
@@ -407,26 +480,31 @@ cmd/                  thin CLI entry points (each <200 LOC)
   watchdog-prompt/    Claude Code UserPromptSubmit hook
   watchdog-scan/      manual /watchdog-scan slash command
   watchdog-mcp/       MCP stdio server (uses mark3labs/mcp-go)
-  watchdog-shim/      install/uninstall/status/doctor CLI
+  watchdog-shim/      install/uninstall/status/doctor/register/unregister CLI
   watchdog-shim-exec/ per-call shim dispatcher
   watchdog-action/    GitHub Action entry
 internal/
   types/      Package, ArtifactBundle structs
-  paths/      cache_dir() resolution
+  paths/      cache_dir / watchdog_dir / manifest / audit-log resolution
   log/        opt-in JSON-line event log
+  audit/      always-on tamper / integrity audit log
   policy/     verdict ranking + worst-wins
   osv/        OSV.dev query, severity, version resolution
-  parsers/    install command lexer + plugin prompt parser
+  parsers/    install command lexer + plugin prompt parser + tamper-pattern detector
   fetchers/   per-ecosystem artifact fetch + tar safety
   analyzer/   LLM prompt + prefilter + verdict extraction
   providers/  multi-LLM CLI registry
   ledger/     persistent plugin vetting ledger
   preflight/  shared OSV+LLM aggregator
   shim/       wrapper templates, FindRealBinary
+  integrity/  install-time manifest + Verify / VerifyDeep
+  decisions/  short-TTL MCP↔shim handoff cache
+  hosts/      register / unregister watchdog-mcp with detected hosts
+  mcp/        pure-Go handlers + Guard (panic / timeout / audit)
   ghaction/   workflow command emitter, path classifiers
   urlenc/     shared URL-path escaper
   config/     env validation + Disabled() helper
-hooks/        Claude Code hook shell scripts (POSIX)
+hooks/        Claude Code hook shell scripts (POSIX, manifest-aware fail-closed)
 ```
 
 ---
