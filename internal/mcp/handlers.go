@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/Maxlemore97/watchdog/internal/analyzer"
+	"github.com/Maxlemore97/watchdog/internal/decisions"
 	"github.com/Maxlemore97/watchdog/internal/integrity"
 	"github.com/Maxlemore97/watchdog/internal/ledger"
 	"github.com/Maxlemore97/watchdog/internal/osv"
@@ -25,12 +26,20 @@ var startedAt = time.Now()
 // PreflightInstall parses an install command line and runs the shared
 // preflight aggregator. Returns the structured Result for the MCP
 // boundary to marshal.
+//
+// Side effect: when the verdict is allow or deny, a short-TTL
+// decision token is written to ~/.watchdog/decisions/. If the agent
+// subsequently runs the same command in shell, the shim consumes
+// the token instead of re-running the analysis. ask verdicts are
+// not cached (see internal/decisions).
 func PreflightInstall(command, mode string) preflight.Result {
 	pkgs, notes := parsers.CollectPackages(command, osv.ResolveVersion)
-	return preflight.Packages(pkgs, notes, preflight.Options{
+	r := preflight.Packages(pkgs, notes, preflight.Options{
 		Mode:              mode,
 		FailClosedVerdict: "ask",
 	})
+	decisions.Write(command, r.Verdict, r.Reason)
+	return r
 }
 
 // ScanPackage runs LLM source review on one published package. Falls
@@ -118,6 +127,10 @@ type HealthResult struct {
 	HandlerTimeoutSec float64 `json:"handler_timeout_sec"`
 	// UptimeSec is how long this server process has been running.
 	UptimeSec float64 `json:"uptime_sec"`
+	// PendingDecisions is the number of unexpired decision tokens
+	// currently in the cache — agents can use it to sanity-check
+	// that MCP→shim handoff is working.
+	PendingDecisions int `json:"pending_decisions"`
 }
 
 // Health returns a structured health snapshot for the agent. Always
@@ -138,5 +151,6 @@ func Health() HealthResult {
 		Integrity:         st,
 		HandlerTimeoutSec: HandlerTimeout().Seconds(),
 		UptimeSec:         time.Since(startedAt).Seconds(),
+		PendingDecisions:  decisions.Count(),
 	}
 }

@@ -11,6 +11,7 @@ package main
 
 import (
 	"bufio"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -18,6 +19,7 @@ import (
 
 	"github.com/Maxlemore97/watchdog/internal/audit"
 	"github.com/Maxlemore97/watchdog/internal/config"
+	"github.com/Maxlemore97/watchdog/internal/decisions"
 	"github.com/Maxlemore97/watchdog/internal/integrity"
 	"github.com/Maxlemore97/watchdog/internal/osv"
 	"github.com/Maxlemore97/watchdog/internal/parsers"
@@ -165,6 +167,26 @@ func main() {
 			"watchdog: integrity check failed (%s) — refusing install. Run `watchdog-shim doctor` to diagnose.\n",
 			st.FirstReason())
 		os.Exit(1)
+	}
+
+	// Decision-token short-circuit. If an MCP-aware agent already
+	// preflighted this exact command (within TTL), honour the cached
+	// verdict instead of re-running OSV/LLM. Cache key is sha256 of
+	// the canonical command — see internal/decisions for properties.
+	if t, err := decisions.Read(cmdLine); err == nil {
+		switch t.Verdict {
+		case "allow":
+			os.Exit(execReal(real, toolname, toolArgs))
+		case "deny":
+			fmt.Fprintf(os.Stderr,
+				"watchdog: blocked install (MCP-cached decision). %s\n", t.Reason)
+			os.Exit(1)
+		}
+	} else if !errors.Is(err, decisions.ErrNoDecision) && !errors.Is(err, decisions.ErrExpired) {
+		// Corrupt token or unexpected I/O — fall through to full
+		// preflight rather than fail hard. The error is already in
+		// the audit log.
+		_ = err
 	}
 
 	result := preflight.Packages(pkgs, notes, preflight.Options{

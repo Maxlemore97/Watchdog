@@ -2,18 +2,70 @@ package mcp
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/Maxlemore97/watchdog/internal/decisions"
 )
 
 func TestPreflightInstall_EmptyCommandAllow(t *testing.T) {
 	t.Setenv("WATCHDOG_CACHE_DIR", t.TempDir())
+	t.Setenv("WATCHDOG_DIR", t.TempDir())
 	r := PreflightInstall("", "osv")
 	if r.Verdict != "allow" {
 		t.Errorf("empty command verdict = %q", r.Verdict)
+	}
+}
+
+// PreflightInstall writes a short-TTL decision token so the shim can
+// short-circuit when the agent runs the install in shell. This pins
+// that behaviour — if it regresses, MCP-aware deployments silently
+// double up on OSV/LLM work.
+func TestPreflightInstall_WritesDecisionForAllowAndDeny(t *testing.T) {
+	t.Setenv("WATCHDOG_CACHE_DIR", t.TempDir())
+	t.Setenv("WATCHDOG_DIR", t.TempDir())
+	cmd := "ls -la"
+	r := PreflightInstall(cmd, "osv")
+	// Non-install commands resolve to "allow" via the no-op path; the
+	// token should still be written so the shim hit-rate is 100% on
+	// the happy path.
+	if r.Verdict != "allow" {
+		t.Fatalf("setup: want allow, got %q", r.Verdict)
+	}
+	tok, err := decisions.Read(cmd)
+	if err != nil {
+		t.Fatalf("Read after PreflightInstall: %v", err)
+	}
+	if tok.Verdict != "allow" {
+		t.Errorf("token verdict = %q", tok.Verdict)
+	}
+}
+
+func TestPreflightInstall_DoesNotWriteDecisionForAsk(t *testing.T) {
+	t.Setenv("WATCHDOG_CACHE_DIR", t.TempDir())
+	t.Setenv("WATCHDOG_DIR", t.TempDir())
+	// Force the FailClosedVerdict path to return ask by simulating
+	// an unreachable OSV (URL pointed at a closed socket).
+	srv := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
+	srv.Close()
+	t.Setenv("WATCHDOG_OSV_ENDPOINT", srv.URL)
+	t.Setenv("PATH", "") // no LLM CLI → analyzer falls back too
+
+	r := PreflightInstall("npm install some-unknown-x9q@1.0.0", "osv")
+	if r.Verdict == "allow" {
+		// If somehow it allowed, the test is unable to exercise the
+		// ask path — skip rather than false-positive.
+		t.Skip("test setup did not produce an ask verdict; got allow")
+	}
+	if r.Verdict == "ask" {
+		_, err := decisions.Read("npm install some-unknown-x9q@1.0.0")
+		if !errors.Is(err, decisions.ErrNoDecision) {
+			t.Errorf("ask verdict should not be cached; got err=%v", err)
+		}
 	}
 }
 

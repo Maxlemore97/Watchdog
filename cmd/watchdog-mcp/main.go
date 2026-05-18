@@ -23,6 +23,7 @@ import (
 	"os"
 
 	"github.com/Maxlemore97/watchdog/internal/config"
+	"github.com/Maxlemore97/watchdog/internal/decisions"
 	wmcp "github.com/Maxlemore97/watchdog/internal/mcp"
 	"github.com/Maxlemore97/watchdog/internal/version"
 
@@ -35,6 +36,9 @@ func main() {
 		return
 	}
 	_ = config.MustLoad()
+	// Sweep stale decision tokens at startup — keeps the cache dir
+	// bounded if a previous MCP run died before its tokens expired.
+	_ = decisions.Cleanup()
 	s := server.NewMCPServer("watchdog", version.String())
 
 	s.AddTool(
