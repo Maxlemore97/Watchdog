@@ -33,8 +33,8 @@ import (
 )
 
 // CurrentVersion is the schema version written by the current code.
-// Bump when fields change in incompatible ways.
-const CurrentVersion = 1
+// Bump when fields change in incompatible ways. v2 added Signature.
+const CurrentVersion = 2
 
 // ProtectiveBinaries lists the binaries whose hashes the manifest
 // records. Listed in alphabetical order for deterministic output.
@@ -64,6 +64,13 @@ type Manifest struct {
 	// Shims maps shim wrapper filename (e.g., "npm", "pip3", "npm.cmd")
 	// → hex sha256 of the wrapper file.
 	Shims map[string]string `json:"shims"`
+	// Signature is a base64-encoded Ed25519 signature over the canonical
+	// JSON of every other field (with Signature itself cleared). Written
+	// by WriteManifest using the local signing key; verified by
+	// LoadManifest. Empty in legacy v1 manifests — Verify reports
+	// SIGNATURE_MISSING (soft) so old installs keep working until the
+	// next install upgrades them.
+	Signature string `json:"signature,omitempty"`
 }
 
 // hashFile returns the hex sha256 of the file at path. Returns "" if
@@ -187,13 +194,31 @@ func LoadManifest() (*Manifest, error) {
 	return &m, nil
 }
 
-// WriteManifest atomically writes m to disk via temp + rename, the
-// same pattern used by internal/ledger.Save (ledger.go:174-193).
+// WriteManifest signs m with the local Ed25519 key, then atomically
+// writes it via temp + rename. The signing key is created on first
+// call (LoadOrCreateKey). On signing failure (e.g., $WATCHDOG_DIR not
+// writable), the manifest is written unsigned and the caller's
+// integrity check will report SIGNATURE_MISSING.
 func WriteManifest(m *Manifest) error {
 	dir := paths.WatchdogDir()
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return err
 	}
+
+	// Sign before write. Clear any existing Signature field so the
+	// canonical bytes are independent of how the caller built m.
+	priv, _, err := LoadOrCreateKey()
+	if err == nil {
+		m.Signature = ""
+		canon, cErr := CanonicalJSON(m)
+		if cErr == nil {
+			m.Signature = SignBytes(priv, canon)
+		}
+	}
+	// If signing failed (no priv key, or canonical-JSON error), leave
+	// Signature empty — verify will report SIGNATURE_MISSING. Better
+	// than failing install entirely on a key-creation hiccup.
+
 	data, err := json.MarshalIndent(m, "", "  ")
 	if err != nil {
 		return err

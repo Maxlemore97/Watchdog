@@ -40,6 +40,7 @@ import (
 	"time"
 
 	"github.com/Maxlemore97/watchdog/internal/audit"
+	"github.com/Maxlemore97/watchdog/internal/integrity"
 	"github.com/Maxlemore97/watchdog/internal/parsers"
 	"github.com/Maxlemore97/watchdog/internal/paths"
 )
@@ -74,6 +75,10 @@ type Token struct {
 	Command   string    `json:"command"`
 	WrittenAt time.Time `json:"written_at"`
 	WriterPID int       `json:"writer_pid,omitempty"`
+	// Signature is a base64-encoded Ed25519 signature over the canonical
+	// JSON of the preceding fields (with Signature cleared). Tokens
+	// without a valid signature are not consumed — see ErrUnsignedToken.
+	Signature string `json:"signature,omitempty"`
 }
 
 // canonicalize tokenizes and re-joins the command so semantically
@@ -126,6 +131,16 @@ func Write(command, verdict, reason string) {
 		WrittenAt: time.Now().UTC(),
 		WriterPID: os.Getpid(),
 	}
+	// Sign before serialization. Failure to sign is non-fatal: an
+	// unsigned token is rejected on read (ErrUnsignedToken) and the
+	// shim falls back to a fresh preflight. Better than blocking the
+	// MCP call when the signing key isn't writable.
+	if priv, _, err := integrity.LoadOrCreateKey(); err == nil {
+		canon, cErr := integrity.CanonicalJSON(t)
+		if cErr == nil {
+			t.Signature = integrity.SignBytes(priv, canon)
+		}
+	}
 	data, err := json.Marshal(t)
 	if err != nil {
 		audit.Record("decision.write_failed", map[string]any{
@@ -161,6 +176,13 @@ var ErrNoDecision = errors.New("no cached decision")
 // ErrExpired is returned by Read when a token exists but has aged
 // past TTL. The expired token is also deleted.
 var ErrExpired = errors.New("cached decision expired")
+
+// ErrUnsignedToken is returned by Read when a token has no signature
+// (legacy token from before signing was enabled), an invalid
+// signature (tamper-shaped), or the local public key needed to
+// verify is missing. The token is deleted so it doesn't keep
+// failing reads.
+var ErrUnsignedToken = errors.New("cached decision has missing or invalid signature")
 
 // Read looks up a cached decision for command. Returns the token on
 // hit, ErrNoDecision when absent, ErrExpired when stale. Any other
@@ -201,12 +223,46 @@ func Read(command string) (*Token, error) {
 		})
 		return nil, ErrExpired
 	}
+
+	// Signature verification. A token without a signature is from
+	// before signing was wired up, or is forged. Either way we don't
+	// honour it — the shim falls back to a fresh preflight.
+	if err := verifyTokenSignature(&t); err != nil {
+		_ = os.Remove(path)
+		audit.Record("decision.unsigned", map[string]any{
+			"key":    key,
+			"reason": err.Error(),
+		})
+		return nil, ErrUnsignedToken
+	}
+
 	audit.Record("decision.consumed", map[string]any{
 		"key":     key,
 		"verdict": t.Verdict,
 		"age_sec": age.Seconds(),
 	})
 	return &t, nil
+}
+
+// verifyTokenSignature confirms t.Signature is non-empty and valid
+// for t's canonical bytes (with the signature field cleared) under
+// the local public key.
+func verifyTokenSignature(t *Token) error {
+	if t.Signature == "" {
+		return errors.New("missing signature")
+	}
+	pub, err := integrity.LoadPublicKey()
+	if err != nil {
+		return fmt.Errorf("public key unavailable: %w", err)
+	}
+	sig := t.Signature
+	t.Signature = ""
+	canon, cErr := integrity.CanonicalJSON(t)
+	t.Signature = sig
+	if cErr != nil {
+		return fmt.Errorf("canonicalize: %w", cErr)
+	}
+	return integrity.VerifyBytes(pub, canon, sig)
 }
 
 // Cleanup removes expired tokens. Best-effort; errors are swallowed.

@@ -175,7 +175,9 @@ func main() {
 				"watchdog: blocked install (MCP-cached decision). %s\n", t.Reason)
 			os.Exit(1)
 		}
-	} else if !errors.Is(err, decisions.ErrNoDecision) && !errors.Is(err, decisions.ErrExpired) {
+	} else if !errors.Is(err, decisions.ErrNoDecision) &&
+		!errors.Is(err, decisions.ErrExpired) &&
+		!errors.Is(err, decisions.ErrUnsignedToken) {
 		// Corrupt token or unexpected I/O — fall through to full
 		// preflight rather than fail hard. The error is already in
 		// the audit log.

@@ -21,16 +21,22 @@ func sha256Hex(data []byte) string {
 
 // Failure codes. Stable strings — used in audit log and reason text.
 const (
-	CodeDisabled           = "DISABLED"
-	CodeManifestMissing    = "MANIFEST_MISSING"
-	CodeManifestCorrupt    = "MANIFEST_CORRUPT"
-	CodePathNotShimFirst   = "PATH_NOT_SHIM_FIRST"
-	CodeSelfHashMismatch   = "SELF_HASH_MISMATCH"
-	CodeSelfUnknown        = "SELF_UNKNOWN_TO_MANIFEST"
-	CodeBinaryMissing      = "BINARY_MISSING"
-	CodeBinaryHashMismatch = "BINARY_HASH_MISMATCH"
-	CodeShimMissing        = "SHIM_MISSING"
-	CodeShimHashMismatch   = "SHIM_HASH_MISMATCH"
+	CodeDisabled            = "DISABLED"
+	CodeManifestMissing     = "MANIFEST_MISSING"
+	CodeManifestCorrupt     = "MANIFEST_CORRUPT"
+	CodePathNotShimFirst    = "PATH_NOT_SHIM_FIRST"
+	CodeSelfHashMismatch    = "SELF_HASH_MISMATCH"
+	CodeSelfUnknown         = "SELF_UNKNOWN_TO_MANIFEST"
+	CodeBinaryMissing       = "BINARY_MISSING"
+	CodeBinaryHashMismatch  = "BINARY_HASH_MISMATCH"
+	CodeShimMissing         = "SHIM_MISSING"
+	CodeShimHashMismatch    = "SHIM_HASH_MISMATCH"
+	CodeSignatureMissing    = "SIGNATURE_MISSING"
+	CodeSignatureInvalid    = "SIGNATURE_INVALID"
+	CodeSignatureKeyMissing = "SIGNATURE_KEY_MISSING"
+	CodeBaselineMissing     = "BASELINE_MISSING"
+	CodeBaselineInvalid     = "BASELINE_SIGNATURE_INVALID"
+	CodeBaselineDrift       = "BASELINE_BINARY_DRIFT"
 )
 
 // Failure describes one integrity-check failure. Code is a stable
@@ -197,6 +203,15 @@ func computeStatus(deep bool) Status {
 		return st
 	}
 
+	// Manifest signature check. Three cases:
+	//   - v1 manifest with no Signature → SIGNATURE_MISSING (soft;
+	//     legacy back-compat; doesn't flip OK).
+	//   - v2 manifest with bad signature → SIGNATURE_INVALID (hard;
+	//     tamper-shaped).
+	//   - v2 manifest but ~/.watchdog/.signing.pub absent →
+	//     SIGNATURE_KEY_MISSING (hard; tamper-shaped).
+	verifyManifestSignature(m, &st)
+
 	// PATH first-position check.
 	if !shim.IsShimDirFirstOnPath(shimDirForCheck(m)) {
 		st.OK = false
@@ -240,8 +255,64 @@ func computeStatus(deep bool) Status {
 
 	if deep {
 		st.OK = deepCheck(m, &st) && st.OK
+		// Build-time baseline. No-op when BaselinePubKey is empty
+		// (unstamped builds). When it's set and baseline.json exists,
+		// reports binary drift against the release-signed baseline.
+		st.OK = verifyBaseline(&st) && st.OK
 	}
 	return st
+}
+
+// verifyManifestSignature checks m.Signature against the local public
+// key. Appends one of three failure codes; returns nothing because
+// the failure mode (soft vs hard) is encoded in the OK flag.
+func verifyManifestSignature(m *Manifest, st *Status) {
+	if m.Signature == "" {
+		// Legacy v1 manifest. Soft failure so old installs keep
+		// working; re-running install upgrades them.
+		st.Failures = append(st.Failures, Failure{
+			Code:   CodeSignatureMissing,
+			Path:   paths.ManifestPath(),
+			Detail: "manifest has no signature (legacy v1 — re-run watchdog-shim install)",
+		})
+		return
+	}
+	pub, err := LoadPublicKey()
+	if err != nil {
+		// Manifest claims a signature but we have no key to verify.
+		// Either the user deleted the .signing.pub file (tamper) or
+		// the install never wrote one (key creation failed earlier).
+		// Either way, hard failure — we can't tell signed-and-good
+		// from signed-and-forged.
+		st.OK = false
+		st.Failures = append(st.Failures, Failure{
+			Code:   CodeSignatureKeyMissing,
+			Path:   PublicKeyPath(),
+			Detail: "manifest is signed but public key missing: " + err.Error(),
+		})
+		return
+	}
+	sig := m.Signature
+	m.Signature = ""
+	canon, cErr := CanonicalJSON(m)
+	m.Signature = sig
+	if cErr != nil {
+		st.OK = false
+		st.Failures = append(st.Failures, Failure{
+			Code:   CodeSignatureInvalid,
+			Path:   paths.ManifestPath(),
+			Detail: "could not re-serialize for verification: " + cErr.Error(),
+		})
+		return
+	}
+	if err := VerifyBytes(pub, canon, sig); err != nil {
+		st.OK = false
+		st.Failures = append(st.Failures, Failure{
+			Code:   CodeSignatureInvalid,
+			Path:   paths.ManifestPath(),
+			Detail: err.Error(),
+		})
+	}
 }
 
 // deepCheck hashes every binary and shim listed in the manifest and
