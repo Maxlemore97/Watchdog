@@ -390,17 +390,73 @@ func parseVerdict(cand string) map[string]any {
 	return parsed
 }
 
+// ---------- telemetry --------------------------------------------
+
+// completedEvent collects everything we emit at the end of an analyzer
+// call. Most fields stay zero until the call reaches the LLM stage;
+// emitAnalyzerCompleted only serialises the ones that were populated.
+type completedEvent struct {
+	ecosystem, name, version string
+	route                    string // cache | prefilter | llm | unfetchable | unparseable | provider_err
+	provider, model          string
+	promptBytes, outputBytes int
+	usage                    providers.Usage
+	usageOK                  bool
+}
+
+func emitAnalyzerCompleted(e completedEvent, verdict string, elapsed time.Duration) {
+	fields := map[string]any{
+		"ecosystem":  e.ecosystem,
+		"name":       e.name,
+		"version":    e.version,
+		"route":      e.route,
+		"verdict":    verdict,
+		"elapsed_ms": elapsed.Milliseconds(),
+	}
+	if e.provider != "" {
+		fields["provider"] = e.provider
+		fields["model"] = e.model
+		fields["prompt_bytes"] = e.promptBytes
+		if e.outputBytes > 0 {
+			fields["response_bytes"] = e.outputBytes
+		}
+	}
+	if e.usageOK {
+		fields["tokens_in"] = e.usage.InputTokens
+		fields["tokens_out"] = e.usage.OutputTokens
+	}
+	log.Event("analyzer_completed", fields)
+}
+
+func verdictOf(m map[string]any) string {
+	if m == nil {
+		return ""
+	}
+	if v, ok := m["verdict"].(string); ok {
+		return v
+	}
+	return ""
+}
+
 // ---------- top-level entry points --------------------------------
 
 // AnalyzePackage runs OSV-cached LLM source review on one published
 // package. Returns a verdict map; on cache hit avoids LLM invocation.
-func AnalyzePackage(ecosystem, name, version string) map[string]any {
+func AnalyzePackage(ecosystem, name, version string) (result map[string]any) {
+	start := time.Now()
+	evt := completedEvent{ecosystem: ecosystem, name: name, version: version}
+	defer func() {
+		emitAnalyzerCompleted(evt, verdictOf(result), time.Since(start))
+	}()
+
 	key := cacheKey(ecosystem, name, version)
 	if cached := cacheLoad(key); cached != nil {
+		evt.route = "cache"
 		return cached
 	}
 	bundle := fetchers.Fetch(ecosystem, name, version)
 	if bundle == nil {
+		evt.route = "unfetchable"
 		return map[string]any{
 			"verdict": "ask",
 			"reason":  fmt.Sprintf("could not fetch %s:%s", ecosystem, name),
@@ -408,23 +464,35 @@ func AnalyzePackage(ecosystem, name, version string) map[string]any {
 	}
 	if v := Prefilter(bundle); v != nil {
 		cacheStore(key, v)
+		evt.route = "prefilter"
 		return v
 	}
 	prompt := buildUserPrompt(bundle)
-	output, _, _, err := providers.InvokeLLM(prompt, SystemPrompt)
+	output, prov, cfg, err := providers.InvokeLLM(prompt, SystemPrompt)
+	evt.provider = prov.Name
+	evt.model = cfg.Model
+	evt.promptBytes = len(prompt)
 	if err != nil || output == "" {
+		evt.route = "provider_err"
 		return map[string]any{
 			"verdict": "ask",
 			"reason":  "llm analyzer returned no parseable verdict",
 		}
+	}
+	evt.outputBytes = len(output)
+	if u, ok := providers.ExtractUsage(prov.Name, output); ok {
+		evt.usage = u
+		evt.usageOK = true
 	}
 	v := extractVerdict(output)
 	if v == nil {
+		evt.route = "unparseable"
 		return map[string]any{
 			"verdict": "ask",
 			"reason":  "llm analyzer returned no parseable verdict",
 		}
 	}
+	evt.route = "llm"
 	cacheStore(key, v)
 	return v
 }
@@ -432,9 +500,16 @@ func AnalyzePackage(ecosystem, name, version string) map[string]any {
 // AnalyzeLocalPlugin runs the analyzer on a plugin directory already
 // on disk. contentHash, when provided, is used in the cache key so
 // re-scanning the same on-disk contents reuses the verdict.
-func AnalyzeLocalPlugin(name, dir, contentHash string) map[string]any {
+func AnalyzeLocalPlugin(name, dir, contentHash string) (result map[string]any) {
+	start := time.Now()
+	evt := completedEvent{ecosystem: "plugin-local", name: name, version: contentHash}
+	defer func() {
+		emitAnalyzerCompleted(evt, verdictOf(result), time.Since(start))
+	}()
+
 	bundle := fetchers.FetchPluginLocal(name, dir)
 	if bundle == nil {
+		evt.route = "unfetchable"
 		return map[string]any{
 			"verdict": "ask",
 			"reason":  "could not read plugin: " + name,
@@ -444,6 +519,7 @@ func AnalyzeLocalPlugin(name, dir, contentHash string) map[string]any {
 	if contentHash != "" {
 		key = cacheKey("plugin-local", name, contentHash)
 		if cached := cacheLoad(key); cached != nil {
+			evt.route = "cache"
 			return cached
 		}
 	}
@@ -451,23 +527,35 @@ func AnalyzeLocalPlugin(name, dir, contentHash string) map[string]any {
 		if contentHash != "" {
 			cacheStore(key, v)
 		}
+		evt.route = "prefilter"
 		return v
 	}
 	prompt := buildUserPrompt(bundle)
-	output, _, _, err := providers.InvokeLLM(prompt, SystemPrompt)
+	output, prov, cfg, err := providers.InvokeLLM(prompt, SystemPrompt)
+	evt.provider = prov.Name
+	evt.model = cfg.Model
+	evt.promptBytes = len(prompt)
 	if err != nil || output == "" {
+		evt.route = "provider_err"
 		return map[string]any{
 			"verdict": "ask",
 			"reason":  "llm analyzer returned no parseable verdict",
 		}
+	}
+	evt.outputBytes = len(output)
+	if u, ok := providers.ExtractUsage(prov.Name, output); ok {
+		evt.usage = u
+		evt.usageOK = true
 	}
 	v := extractVerdict(output)
 	if v == nil {
+		evt.route = "unparseable"
 		return map[string]any{
 			"verdict": "ask",
 			"reason":  "llm analyzer returned no parseable verdict",
 		}
 	}
+	evt.route = "llm"
 	if contentHash != "" {
 		cacheStore(key, v)
 	}

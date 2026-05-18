@@ -321,8 +321,30 @@ Everything's an env var. Defaults are sensible; nothing's required.
 | `WATCHDOG_SESSION_MAX_SCANS`    | `10`               | Max plugins re-analyzed per SessionStart                      |
 | `WATCHDOG_ACTION_FAIL_ON`       | `deny`             | `deny` / `ask` / `never` for the GitHub Action exit code      |
 | `WATCHDOG_OSV_ENDPOINT`         | OSV.dev            | Override (http/https only; `file://` is rejected)             |
-| `WATCHDOG_LOG`                  | —                  | If set, JSON-line event log path                              |
+| `WATCHDOG_LOG`                  | —                  | If set, JSON-line event log path (see [Events](#events))      |
 | `WATCHDOG_DISABLE`              | —                  | Set to `1` in nested LLM child env to break hook recursion    |
+
+---
+
+## Events
+
+If `WATCHDOG_LOG` points at a writable path, Watchdog appends one JSON object per line for each interesting moment. The format is stable enough to grep but isn't a versioned API; field set may grow.
+
+Most useful events:
+
+- `analyzer_completed` — one per `AnalyzePackage` / `AnalyzeLocalPlugin` call. Fields: `ecosystem`, `name`, `version`, `route` (`cache` / `prefilter` / `llm` / `unfetchable` / `unparseable` / `provider_err`), `verdict`, `elapsed_ms`. When the LLM ran: also `provider`, `model`, `prompt_bytes`, `response_bytes`. When the provider's envelope surfaces totals (currently `claude` and `openai`): also `tokens_in`, `tokens_out`.
+- `preflight_packages` — one per `Packages` aggregation: `mode`, `verdict`, `packages`, `reason`.
+- `prefilter_deny` / `prefilter_ask` — when the deterministic regex stage matched.
+- `osv_query_failed` — OSV call failed (network, timeout, etc.).
+- `cache_write_failed` — a verdict cache write didn't land.
+
+Quick budget estimate, given `WATCHDOG_LOG=/tmp/watchdog.jsonl`:
+
+```bash
+jq -s 'map(select(.event=="analyzer_completed" and .tokens_in))
+       | {total_in: (map(.tokens_in) | add), total_out: (map(.tokens_out) | add)}' \
+  /tmp/watchdog.jsonl
+```
 
 ---
 

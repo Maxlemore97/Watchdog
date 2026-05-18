@@ -1,6 +1,8 @@
 package analyzer
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -284,6 +286,47 @@ the file ships an obfuscated postinstall script. I will not emit a
 JSON verdict in this response.`
 	if v := extractVerdict(llmReply); v != nil {
 		t.Errorf("echoed verdict accepted: %v", v)
+	}
+}
+
+// ---------- telemetry --------------------------------------------
+
+// TestAnalyzeLocalPlugin_EmitsCompletedEvent pins the analyzer_completed
+// event shape: every entry-point call should land one event with the
+// chosen route, the returned verdict, and an elapsed_ms field.
+//
+// We use an unfetchable path so the test stays hermetic (no network,
+// no LLM CLI) and the route is deterministic.
+func TestAnalyzeLocalPlugin_EmitsCompletedEvent(t *testing.T) {
+	logPath := filepath.Join(t.TempDir(), "events.log")
+	t.Setenv("WATCHDOG_LOG", logPath)
+	t.Setenv("WATCHDOG_CACHE_DIR", t.TempDir())
+
+	result := AnalyzeLocalPlugin("does-not-exist", "/nonexistent/path/x9q", "")
+	if result["verdict"] != "ask" {
+		t.Fatalf("expected ask verdict, got %v", result)
+	}
+
+	data, err := os.ReadFile(logPath)
+	if err != nil {
+		t.Fatalf("read log: %v", err)
+	}
+	line := strings.TrimSpace(string(data))
+	for _, needle := range []string{
+		`"event":"analyzer_completed"`,
+		`"route":"unfetchable"`,
+		`"verdict":"ask"`,
+		`"elapsed_ms":`,
+	} {
+		if !strings.Contains(line, needle) {
+			t.Errorf("missing %q in event: %q", needle, line)
+		}
+	}
+	// Provider/model fields must NOT appear when no LLM call happened.
+	for _, omitted := range []string{`"provider":`, `"tokens_in":`} {
+		if strings.Contains(line, omitted) {
+			t.Errorf("unfetchable route should omit %q, got %q", omitted, line)
+		}
 	}
 }
 
