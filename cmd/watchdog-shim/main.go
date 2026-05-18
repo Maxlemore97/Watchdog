@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/Maxlemore97/watchdog/internal/audit"
+	"github.com/Maxlemore97/watchdog/internal/hosts"
 	"github.com/Maxlemore97/watchdog/internal/integrity"
 	"github.com/Maxlemore97/watchdog/internal/paths"
 	"github.com/Maxlemore97/watchdog/internal/providers"
@@ -22,12 +23,13 @@ import (
 )
 
 func usage() {
-	fmt.Fprintln(os.Stderr, `watchdog-shim install   [--dir DIR] [--no-overwrite]
-watchdog-shim uninstall [--dir DIR]
-watchdog-shim status    [--dir DIR]
-watchdog-shim doctor
-watchdog-shim doctor    [--llm-smoke] [--llm-smoke-timeout=DUR]
-watchdog-shim cache     stats | clear [--type=llm|osv|all] [--older-than=DUR] [--dry-run]
+	fmt.Fprintln(os.Stderr, `watchdog-shim install     [--dir DIR] [--no-overwrite]
+watchdog-shim uninstall   [--dir DIR]
+watchdog-shim status      [--dir DIR]
+watchdog-shim doctor      [--llm-smoke] [--llm-smoke-timeout=DUR]
+watchdog-shim register    [--host=NAME] [--all]
+watchdog-shim unregister  [--host=NAME] [--all]
+watchdog-shim cache       stats | clear [--type=llm|osv|all] [--older-than=DUR] [--dry-run]
 watchdog-shim --version`)
 }
 
@@ -50,6 +52,10 @@ func main() {
 		os.Exit(cmdStatus(rest))
 	case "doctor":
 		os.Exit(cmdDoctor(rest))
+	case "register":
+		os.Exit(cmdRegister(rest))
+	case "unregister":
+		os.Exit(cmdUnregister(rest))
 	case "cache":
 		os.Exit(cmdCache(rest))
 	default:
@@ -252,7 +258,149 @@ func cmdDoctor(args []string) int {
 			fmt.Printf("         path: %s\n", where)
 		}
 	}
+
+	// 6. MCP host registration — show detected hosts and whether
+	// watchdog-mcp is wired into each. Read-only; modifications go
+	// through `watchdog-shim register/unregister`.
+	detected := hosts.Detect()
+	if len(detected) == 0 {
+		fmt.Println("  --  no MCP-aware hosts detected (Claude Desktop / Cursor)")
+	} else {
+		for _, h := range detected {
+			if h.IsRegistered() {
+				fmt.Printf("  ok  %s: watchdog-mcp registered (%s)\n", h.Name(), h.ConfigPath())
+			} else {
+				fmt.Printf("  warn %s detected but not registered — run `watchdog-shim register --host=%s`\n",
+					h.Name(), h.Name())
+			}
+		}
+	}
 	return 0
+}
+
+// resolveMCPExec returns the absolute path to watchdog-mcp. Prefers
+// a sibling of watchdog-shim (so a freshly-installed tree finds its
+// own binary before PATH catches up), then falls back to exec.LookPath.
+// Empty return means the binary isn't installed.
+func resolveMCPExec() string {
+	name := "watchdog-mcp"
+	if runtime.GOOS == "windows" {
+		name += ".exe"
+	}
+	if self, err := os.Executable(); err == nil {
+		sibling := filepath.Join(filepath.Dir(self), name)
+		if st, err := os.Stat(sibling); err == nil && !st.IsDir() {
+			if abs, err := filepath.Abs(sibling); err == nil {
+				return abs
+			}
+			return sibling
+		}
+	}
+	if p, err := exec.LookPath(name); err == nil {
+		return p
+	}
+	return ""
+}
+
+// parseHostFlag returns the host name targeted by --host (or "" for
+// "use --all logic") and whether --all was set. Mutually-exclusive
+// flags would be nicer, but flag doesn't support it without custom
+// parsing — we treat --host as taking precedence if both are set.
+func parseHostFlag(args []string) (host string, all bool) {
+	fs := flag.NewFlagSet("host", flag.ExitOnError)
+	hostFlag := fs.String("host", "", "host name (e.g., claude-desktop, cursor)")
+	allFlag := fs.Bool("all", false, "apply to every detected host")
+	_ = fs.Parse(args)
+	return *hostFlag, *allFlag
+}
+
+func cmdRegister(args []string) int {
+	hostName, all := parseHostFlag(args)
+	execPath := resolveMCPExec()
+	if execPath == "" {
+		fmt.Fprintln(os.Stderr, "register: watchdog-mcp binary not found on PATH or alongside watchdog-shim")
+		return 1
+	}
+
+	var targets []hosts.Host
+	switch {
+	case hostName != "":
+		h := hosts.ByName(hostName)
+		if h == nil {
+			fmt.Fprintf(os.Stderr, "register: unknown host %q\n", hostName)
+			return 2
+		}
+		if !h.Exists() {
+			fmt.Fprintf(os.Stderr, "register: %s not installed (no config dir at %s)\n",
+				hostName, filepath.Dir(h.ConfigPath()))
+			return 1
+		}
+		targets = []hosts.Host{h}
+	case all:
+		targets = hosts.Detect()
+		if len(targets) == 0 {
+			fmt.Println("register: no MCP-aware hosts detected")
+			return 0
+		}
+	default:
+		fmt.Fprintln(os.Stderr, "register: specify --host=NAME or --all")
+		return 2
+	}
+
+	rc := 0
+	for _, h := range targets {
+		if err := h.Register(execPath); err != nil {
+			fmt.Fprintf(os.Stderr, "register %s: %v\n", h.Name(), err)
+			rc = 1
+			continue
+		}
+		audit.Record("host.registered", map[string]any{
+			"host":      h.Name(),
+			"config":    h.ConfigPath(),
+			"exec_path": execPath,
+		})
+		fmt.Printf("Registered watchdog-mcp with %s (%s)\n", h.Name(), h.ConfigPath())
+	}
+	return rc
+}
+
+func cmdUnregister(args []string) int {
+	hostName, all := parseHostFlag(args)
+
+	var targets []hosts.Host
+	switch {
+	case hostName != "":
+		h := hosts.ByName(hostName)
+		if h == nil {
+			fmt.Fprintf(os.Stderr, "unregister: unknown host %q\n", hostName)
+			return 2
+		}
+		targets = []hosts.Host{h}
+	case all:
+		// Unregister even from hosts that aren't currently "Exists"
+		// (the user may have deleted the config dir but we still
+		// want to clean up any stale entry if their config file
+		// still lives somewhere).
+		targets = hosts.All()
+	default:
+		fmt.Fprintln(os.Stderr, "unregister: specify --host=NAME or --all")
+		return 2
+	}
+
+	rc := 0
+	for _, h := range targets {
+		if err := h.Unregister(); err != nil {
+			fmt.Fprintf(os.Stderr, "unregister %s: %v\n", h.Name(), err)
+			rc = 1
+			continue
+		}
+		audit.Record("host.unregistered", map[string]any{
+			"host":   h.Name(),
+			"config": h.ConfigPath(),
+		})
+		fmt.Printf("Unregistered watchdog-mcp from %s\n", h.Name())
+	}
+	return rc
 }
 
 // invokeFn is the subset of provider.Invoke that the smoke runner
