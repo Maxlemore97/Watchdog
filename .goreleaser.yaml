@@ -14,7 +14,7 @@ builds:
     goos: [linux, darwin, windows]
     goarch: [amd64, arm64]
     flags: ["-trimpath"]
-    ldflags: ["-s -w -X main.Version={{.Version}}"]
+    ldflags: ["-s -w -X github.com/Maxlemore97/watchdog/internal/version.Version=v{{.Version}}"]
   - id: watchdog-session
     main: ./cmd/watchdog-session
     binary: watchdog-session
@@ -22,7 +22,7 @@ builds:
     goos: [linux, darwin, windows]
     goarch: [amd64, arm64]
     flags: ["-trimpath"]
-    ldflags: ["-s -w -X main.Version={{.Version}}"]
+    ldflags: ["-s -w -X github.com/Maxlemore97/watchdog/internal/version.Version=v{{.Version}}"]
   - id: watchdog-prompt
     main: ./cmd/watchdog-prompt
     binary: watchdog-prompt
@@ -30,7 +30,7 @@ builds:
     goos: [linux, darwin, windows]
     goarch: [amd64, arm64]
     flags: ["-trimpath"]
-    ldflags: ["-s -w -X main.Version={{.Version}}"]
+    ldflags: ["-s -w -X github.com/Maxlemore97/watchdog/internal/version.Version=v{{.Version}}"]
   - id: watchdog-scan
     main: ./cmd/watchdog-scan
     binary: watchdog-scan
@@ -38,7 +38,7 @@ builds:
     goos: [linux, darwin, windows]
     goarch: [amd64, arm64]
     flags: ["-trimpath"]
-    ldflags: ["-s -w -X main.Version={{.Version}}"]
+    ldflags: ["-s -w -X github.com/Maxlemore97/watchdog/internal/version.Version=v{{.Version}}"]
   - id: watchdog-mcp
     main: ./cmd/watchdog-mcp
     binary: watchdog-mcp
@@ -46,7 +46,7 @@ builds:
     goos: [linux, darwin, windows]
     goarch: [amd64, arm64]
     flags: ["-trimpath"]
-    ldflags: ["-s -w -X main.Version={{.Version}}"]
+    ldflags: ["-s -w -X github.com/Maxlemore97/watchdog/internal/version.Version=v{{.Version}}"]
   - id: watchdog-shim
     main: ./cmd/watchdog-shim
     binary: watchdog-shim
@@ -54,7 +54,7 @@ builds:
     goos: [linux, darwin, windows]
     goarch: [amd64, arm64]
     flags: ["-trimpath"]
-    ldflags: ["-s -w -X main.Version={{.Version}}"]
+    ldflags: ["-s -w -X github.com/Maxlemore97/watchdog/internal/version.Version=v{{.Version}}"]
   - id: watchdog-shim-exec
     main: ./cmd/watchdog-shim-exec
     binary: watchdog-shim-exec
@@ -62,7 +62,7 @@ builds:
     goos: [linux, darwin, windows]
     goarch: [amd64, arm64]
     flags: ["-trimpath"]
-    ldflags: ["-s -w -X main.Version={{.Version}}"]
+    ldflags: ["-s -w -X github.com/Maxlemore97/watchdog/internal/version.Version=v{{.Version}}"]
   - id: watchdog-action
     main: ./cmd/watchdog-action
     binary: watchdog-action
@@ -70,7 +70,7 @@ builds:
     goos: [linux, darwin, windows]
     goarch: [amd64, arm64]
     flags: ["-trimpath"]
-    ldflags: ["-s -w -X main.Version={{.Version}}"]
+    ldflags: ["-s -w -X github.com/Maxlemore97/watchdog/internal/version.Version=v{{.Version}}"]
 
 archives:
   - id: default
