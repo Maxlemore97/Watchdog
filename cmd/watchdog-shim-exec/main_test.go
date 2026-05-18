@@ -143,16 +143,16 @@ func TestShimExec_DenyExits1WithoutExec(t *testing.T) {
 	bin := buildBinary(t)
 	realDir := t.TempDir()
 	makeRealBin(t, realDir, "npm")
-	// WATCHDOG_OFFLINE_DECISION=deny forces deny when network is
+	// WATCHDOG_FAILCLOSED_VERDICT=deny forces deny when OSV is
 	// unreachable. PATH excludes any LLM CLI; WATCHDOG_RESOLVE_LATEST=0
 	// avoids the registry latest-version call; an unreachable OSV
-	// endpoint pushes the offline-decision path.
+	// endpoint pushes the fail-closed path.
 	closedSrv := newClosedServer(t)
 	stdout, stderr, code := runShim(t, bin,
 		[]string{"npm", "install", "lodash"},
 		"PATH="+realDir+":/bin:/usr/bin",
 		"WATCHDOG_MODE=osv",
-		"WATCHDOG_OFFLINE_DECISION=deny",
+		"WATCHDOG_FAILCLOSED_VERDICT=deny",
 		"WATCHDOG_RESOLVE_LATEST=0",
 		"WATCHDOG_OSV_ENDPOINT="+closedSrv,
 		"WATCHDOG_CACHE_DIR="+t.TempDir(),

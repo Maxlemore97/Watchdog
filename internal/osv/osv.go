@@ -148,8 +148,8 @@ func endpointURL() string {
 
 // Query looks up advisories for pkg on OSV.dev. Returns
 // (vulns, error). On any network or parse failure err is non-nil so
-// the caller's offline-decision policy applies. Successful but empty
-// responses return ([]map[string]any{}, nil). Cache hits return
+// the caller's fail-closed verdict policy applies. Successful but
+// empty responses return ([]map[string]any{}, nil). Cache hits return
 // (cached, nil).
 func Query(pkg types.Package) ([]map[string]any, error) {
 	if cached := CacheLoad(pkg); cached != nil {

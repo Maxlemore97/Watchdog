@@ -228,15 +228,15 @@ func TestPackages_CapOverridableViaEnv(t *testing.T) {
 	}
 }
 
-// ---------- offline decisions ------------------------------------
+// ---------- fail-closed verdicts --------------------------------
 
-func TestPackages_OSVErrorUsesOfflineDecision(t *testing.T) {
+func TestPackages_OSVErrorUsesFailClosedVerdict(t *testing.T) {
 	restore := withStubs(t,
 		stubErr,
 		func(string, string, string) map[string]any { return nil },
 	)
 	defer restore()
-	r := Packages([]types.Package{pkg("bad", "1")}, nil, Options{Mode: "osv", OfflineDecision: "deny"})
+	r := Packages([]types.Package{pkg("bad", "1")}, nil, Options{Mode: "osv", FailClosedVerdict: "deny"})
 	if r.Verdict != "deny" {
 		t.Errorf("verdict = %q reason=%q", r.Verdict, r.Reason)
 	}
@@ -346,8 +346,8 @@ func TestRunOSVParallel_ZeroPackages(t *testing.T) {
 }
 
 // TestPackages_AnalyzerPanic verifies safeAnalyze recovers, surfaces
-// __error__, and preflight falls back to the offline decision rather
-// than crashing the host.
+// __error__, and preflight falls back to the fail-closed verdict
+// rather than crashing the host.
 func TestPackages_AnalyzerPanic(t *testing.T) {
 	restore := withStubs(t,
 		stubOK,
@@ -357,11 +357,11 @@ func TestPackages_AnalyzerPanic(t *testing.T) {
 	)
 	defer restore()
 	r := Packages([]types.Package{pkg("a", "1")}, nil, Options{
-		Mode:            "claude",
-		OfflineDecision: "deny",
+		Mode:              "claude",
+		FailClosedVerdict: "deny",
 	})
 	if r.Verdict != "deny" {
-		t.Errorf("panic + OfflineDecision=deny: verdict=%q want deny", r.Verdict)
+		t.Errorf("panic + FailClosedVerdict=deny: verdict=%q want deny", r.Verdict)
 	}
 	if !strings.Contains(r.Reason, "analyzer error") {
 		t.Errorf("missing analyzer-error in reason: %q", r.Reason)
@@ -389,8 +389,8 @@ func TestRunOSVParallel_PanicRecover(t *testing.T) {
 	for i := range pkgs {
 		pkgs[i] = pkg(fmt.Sprintf("pkg-%d", i), "1")
 	}
-	r := Packages(pkgs, nil, Options{Mode: "osv", OfflineDecision: "ask"})
-	// The panicking worker yields verdict=ask (offline-decision); the
+	r := Packages(pkgs, nil, Options{Mode: "osv", FailClosedVerdict: "ask"})
+	// The panicking worker yields verdict=ask (fail-closed); the
 	// other 7 are clean. Worst-wins -> ask.
 	if r.Verdict != "ask" {
 		t.Errorf("verdict = %q, want ask", r.Verdict)

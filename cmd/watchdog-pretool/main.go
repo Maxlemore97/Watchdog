@@ -28,8 +28,11 @@ func mode() string {
 	return v
 }
 
-func offlineDecision() string {
-	v := strings.ToLower(strings.TrimSpace(os.Getenv("WATCHDOG_OFFLINE_DECISION")))
+// failClosedVerdict picks the verdict to emit when a check cannot run
+// (OSV unreachable, LLM CLI missing, analyzer panic). Defaults to `ask`
+// inside Claude Code because the host has a UI to surface a question.
+func failClosedVerdict() string {
+	v := strings.ToLower(strings.TrimSpace(os.Getenv("WATCHDOG_FAILCLOSED_VERDICT")))
 	switch v {
 	case "allow", "deny", "ask":
 		return v
@@ -94,9 +97,9 @@ func main() {
 		return
 	}
 	r := preflight.Packages(pkgs, notes, preflight.Options{
-		Mode:            mode(),
-		OfflineDecision: offlineDecision(),
-		BudgetSeconds:   hookBudgetSecs(),
+		Mode:              mode(),
+		FailClosedVerdict: failClosedVerdict(),
+		BudgetSeconds:     hookBudgetSecs(),
 	})
 	emit(r.Verdict, r.Reason)
 }

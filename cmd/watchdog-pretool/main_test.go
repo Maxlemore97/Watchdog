@@ -93,12 +93,12 @@ func TestPretool_InstallProducesHookDecision(t *testing.T) {
 	bin := buildBinary(t)
 	// Use mode=osv with WATCHDOG_RESOLVE_LATEST=0 so we skip the
 	// registry HTTP call. The OSV query itself will fail without
-	// network; offline_decision=allow keeps the test self-contained.
+	// network; failclosed_verdict=allow keeps the test self-contained.
 	payload := `{"tool_name":"Bash","tool_input":{"command":"npm install some-deliberately-fake-package-xyz-9q"}}`
 	out := runBinary(t, bin, payload,
 		"WATCHDOG_MODE=osv",
 		"WATCHDOG_RESOLVE_LATEST=0",
-		"WATCHDOG_OFFLINE_DECISION=allow",
+		"WATCHDOG_FAILCLOSED_VERDICT=allow",
 		"WATCHDOG_CACHE_DIR="+t.TempDir(),
 	)
 	if out == "" {

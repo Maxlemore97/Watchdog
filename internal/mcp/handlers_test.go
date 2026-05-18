@@ -89,7 +89,7 @@ func TestOSVQuery_LiveServerHappyPath(t *testing.T) {
 	}
 }
 
-func TestOSVQuery_OfflineReturnsError(t *testing.T) {
+func TestOSVQuery_UnreachableReturnsError(t *testing.T) {
 	t.Setenv("WATCHDOG_CACHE_DIR", t.TempDir())
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
 	srv.Close() // closed → connection refused
@@ -97,10 +97,10 @@ func TestOSVQuery_OfflineReturnsError(t *testing.T) {
 
 	r := OSVQuery("npm", "lodash", "4.0.0")
 	if r.Error == "" {
-		t.Errorf("offline should populate Error")
+		t.Errorf("OSV unreachable should populate Error")
 	}
 	if len(r.Vulns) != 0 {
-		t.Errorf("offline vulns should be empty: %v", r.Vulns)
+		t.Errorf("OSV unreachable vulns should be empty: %v", r.Vulns)
 	}
 }
 

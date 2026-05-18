@@ -9,7 +9,7 @@ import (
 func TestLoad_Defaults(t *testing.T) {
 	// Clear every env we care about.
 	for _, k := range []string{
-		"WATCHDOG_MODE", "WATCHDOG_MIN_SEVERITY", "WATCHDOG_OFFLINE_DECISION",
+		"WATCHDOG_MODE", "WATCHDOG_MIN_SEVERITY", "WATCHDOG_FAILCLOSED_VERDICT",
 		"WATCHDOG_MAX_PACKAGES", "WATCHDOG_LLM_PROVIDER", "WATCHDOG_LLM_TIMEOUT",
 		"WATCHDOG_CACHE_TTL", "WATCHDOG_LLM_CACHE_TTL", "WATCHDOG_HOOK_BUDGET_SECS",
 		"WATCHDOG_SESSION_MAX_SCANS", "WATCHDOG_ACTION_FAIL_ON",
@@ -88,15 +88,15 @@ func TestDisabled(t *testing.T) {
 	}
 }
 
-func TestLoad_AcceptsValidOffline(t *testing.T) {
+func TestLoad_AcceptsValidFailClosed(t *testing.T) {
 	for _, v := range []string{"allow", "ask", "deny"} {
-		t.Setenv("WATCHDOG_OFFLINE_DECISION", v)
+		t.Setenv("WATCHDOG_FAILCLOSED_VERDICT", v)
 		c, err := Load()
 		if err != nil {
-			t.Errorf("offline=%q rejected: %v", v, err)
+			t.Errorf("failclosed=%q rejected: %v", v, err)
 		}
-		if c.OfflineDecision != v {
-			t.Errorf("offline=%q not preserved: %q", v, c.OfflineDecision)
+		if c.FailClosedVerdict != v {
+			t.Errorf("failclosed=%q not preserved: %q", v, c.FailClosedVerdict)
 		}
 	}
 }

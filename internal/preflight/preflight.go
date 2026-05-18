@@ -36,7 +36,7 @@ const DefaultMaxPackages = 50
 // level so the production call sites stay simple.
 //
 // osv.Query already returns (vulns, error); preflight uses err to
-// trigger the offline-decision branch.
+// trigger the fail-closed branch.
 var (
 	queryOSV       func(types.Package) ([]map[string]any, error) = osv.Query
 	analyzePackage                                               = analyzer.AnalyzePackage
@@ -44,9 +44,9 @@ var (
 
 // Options tweaks individual preflight calls.
 type Options struct {
-	Mode             string  // osv / claude / both
-	OfflineDecision  string  // verdict on OSV/analyzer error (default ask)
-	BudgetSeconds    float64 // wall-clock cap; <=0 means no cap
+	Mode              string  // osv / claude / both
+	FailClosedVerdict string  // verdict on OSV/analyzer error (default ask)
+	BudgetSeconds     float64 // wall-clock cap; <=0 means no cap
 }
 
 // Result is what every adapter renders.
@@ -66,9 +66,9 @@ func Packages(pkgs []types.Package, notes []string, opts Options) Result {
 	if !ValidModes[mode] {
 		mode = "both"
 	}
-	offline := opts.OfflineDecision
-	if offline != "allow" && offline != "deny" && offline != "ask" {
-		offline = "ask"
+	fallback := opts.FailClosedVerdict
+	if fallback != "allow" && fallback != "deny" && fallback != "ask" {
+		fallback = "ask"
 	}
 
 	base := Result{
@@ -111,11 +111,11 @@ func Packages(pkgs []types.Package, notes []string, opts Options) Result {
 	processedClaude := 0
 
 	if mode == "osv" || mode == "both" {
-		decisions, findings, processedOSV, budgetHit = osvPhase(pkgs, offline, overBudget, decisions, findings)
+		decisions, findings, processedOSV, budgetHit = osvPhase(pkgs, fallback, overBudget, decisions, findings)
 	}
 
 	if (mode == "claude" || mode == "both") && !budgetHit && !osvDenied(decisions) {
-		decisions, findings, processedClaude, budgetHit = llmPhase(pkgs, offline, overBudget, decisions, findings)
+		decisions, findings, processedClaude, budgetHit = llmPhase(pkgs, fallback, overBudget, decisions, findings)
 	}
 
 	if budgetHit {
@@ -176,7 +176,7 @@ type decision struct {
 // per package that errors or carries a finding at-or-above threshold.
 // Returns updated (decisions, findings, processed-count, budget-hit).
 func osvPhase(
-	pkgs []types.Package, offline string, overBudget func() bool,
+	pkgs []types.Package, fallback string, overBudget func() bool,
 	decisions []decision, findings []map[string]any,
 ) ([]decision, []map[string]any, int, bool) {
 	osvResults := runOSVParallel(pkgs)
@@ -188,7 +188,7 @@ func osvPhase(
 		processed++
 		if r.err != nil {
 			decisions = append(decisions, decision{
-				Verdict: offline,
+				Verdict: fallback,
 				Reason:  fmt.Sprintf("OSV unreachable for %s: %v", pkgLabel(r.pkg), r.err),
 			})
 			continue
@@ -226,7 +226,7 @@ func osvPhase(
 // recorded; panics are recovered into a synthetic __error__ entry by
 // safeAnalyze. Returns updated (decisions, findings, processed, budget-hit).
 func llmPhase(
-	pkgs []types.Package, offline string, overBudget func() bool,
+	pkgs []types.Package, fallback string, overBudget func() bool,
 	decisions []decision, findings []map[string]any,
 ) ([]decision, []map[string]any, int, bool) {
 	processed := 0
@@ -241,7 +241,7 @@ func llmPhase(
 		}
 		if errStr, ok := verdict["__error__"].(string); ok {
 			decisions = append(decisions, decision{
-				Verdict: offline,
+				Verdict: fallback,
 				Reason:  fmt.Sprintf("analyzer error for %s: %s", pkgLabel(pkg), errStr),
 			})
 			continue

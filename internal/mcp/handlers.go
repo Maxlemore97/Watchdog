@@ -20,8 +20,8 @@ import (
 func PreflightInstall(command, mode string) preflight.Result {
 	pkgs, notes := parsers.CollectPackages(command, osv.ResolveVersion)
 	return preflight.Packages(pkgs, notes, preflight.Options{
-		Mode:            mode,
-		OfflineDecision: "ask",
+		Mode:              mode,
+		FailClosedVerdict: "ask",
 	})
 }
 

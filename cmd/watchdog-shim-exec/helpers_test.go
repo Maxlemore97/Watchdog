@@ -19,7 +19,7 @@ func newCleanOSVServer(t *testing.T) *httptest.Server {
 
 // newClosedServer spins up a listener, immediately closes it, and
 // returns the URL. Any request hits "connection refused" — the
-// offline-decision path.
+// fail-closed path.
 func newClosedServer(t *testing.T) string {
 	t.Helper()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))

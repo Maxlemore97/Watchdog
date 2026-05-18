@@ -26,7 +26,7 @@ Watchdog plugs that gap. It intercepts installs at the **agent surface** — whe
 1. **OSV.dev CVE lookup** — fast, deterministic, cached. Works regardless of which LLM you use.
 2. **LLM source review** — pulls a curated subset of the artifact's files and asks the model to flag malicious patterns the CVE feed has not caught yet (typosquats, malicious `postinstall`, obfuscated payloads, credential-stealing skills).
 
-Verdict: `allow`, `ask`, or `deny`. Worst across packages wins. Fail-closed defaults: missing CLI / offline network → `ask`, never silent allow.
+Verdict: `allow`, `ask`, or `deny`. Worst across packages wins. Fail-closed defaults: OSV unreachable / LLM CLI missing / analyzer timeout → `ask`, never silent allow.
 
 > **Scope discipline.** Watchdog targets the agent surface only. If your tool catches manifest edits in PRs, Watchdog is not your replacement — it covers the surface those tools were never designed for.
 
@@ -312,7 +312,7 @@ All knobs are env vars. Sensible defaults; nothing required.
 |---------------------------------|--------------------|---------------------------------------------------------------|
 | `WATCHDOG_MODE`                 | `both`             | `osv` / `claude` / `both`                                     |
 | `WATCHDOG_MIN_SEVERITY`         | `low`              | OSV severity floor (`none`/`low`/`medium`/`high`/`critical`)  |
-| `WATCHDOG_OFFLINE_DECISION`     | `ask` (hooks) / `deny` (shim) | What to emit when OSV unreachable / LLM CLI missing |
+| `WATCHDOG_FAILCLOSED_VERDICT`   | `ask` (hooks) / `deny` (shim) | Verdict to emit when a check cannot run (OSV unreachable, LLM CLI missing, analyzer panic/timeout) |
 | `WATCHDOG_MAX_PACKAGES`         | `50`               | Above this, return `ask` without scanning                     |
 | `WATCHDOG_LLM_PROVIDER`         | `auto`             | `claude` / `gemini` / `openai` / `ollama` / `generic`         |
 | `WATCHDOG_LLM_MODEL`            | per-provider       | Override model name                                           |

@@ -41,7 +41,8 @@ machine running the agent**.
 - **Recursive LLM invocation** via hooks triggered from within the
   analyzer's subprocess. Defense: `WATCHDOG_DISABLE=1` set in child env.
 - **OSV / registry network failure** masking a vulnerability. Defense:
-  fail-closed default (`offline_decision="ask"`), per-call timeouts.
+  fail-closed default (`WATCHDOG_FAILCLOSED_VERDICT="ask"`), per-call
+  timeouts.
 - **DoS via install command fan-out**. Defense: `WATCHDOG_MAX_PACKAGES`
   cap (default 50); larger commands return `ask` without scanning.
 - **`WATCHDOG_OSV_ENDPOINT` scheme abuse**. Only `http://` / `https://`

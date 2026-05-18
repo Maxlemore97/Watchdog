@@ -34,7 +34,7 @@ import (
 type Config struct {
 	Mode             string        // WATCHDOG_MODE — both/osv/claude
 	MinSeverity      string        // WATCHDOG_MIN_SEVERITY — none/low/medium/high/critical
-	OfflineDecision  string        // WATCHDOG_OFFLINE_DECISION — allow/ask/deny
+	FailClosedVerdict string       // WATCHDOG_FAILCLOSED_VERDICT — allow/ask/deny (verdict when OSV unreachable / LLM CLI missing / analyzer error)
 	MaxPackages      int           // WATCHDOG_MAX_PACKAGES
 	LLMProvider      string        // WATCHDOG_LLM_PROVIDER
 	LLMModel         string        // WATCHDOG_LLM_MODEL
@@ -58,7 +58,7 @@ type Config struct {
 var (
 	validModes        = map[string]bool{"osv": true, "claude": true, "both": true}
 	validSeverities   = map[string]bool{"none": true, "low": true, "medium": true, "high": true, "critical": true}
-	validOffline      = map[string]bool{"allow": true, "ask": true, "deny": true}
+	validFailClosed   = map[string]bool{"allow": true, "ask": true, "deny": true}
 	validActionFailOn = map[string]bool{"deny": true, "ask": true, "never": true}
 	validProviders    = map[string]bool{"auto": true, "claude": true, "gemini": true, "openai": true, "ollama": true, "generic": true}
 )
@@ -69,7 +69,7 @@ func Load() (Config, error) {
 	c := Config{
 		Mode:            envLower("WATCHDOG_MODE", "both"),
 		MinSeverity:     envLower("WATCHDOG_MIN_SEVERITY", "low"),
-		OfflineDecision: envLower("WATCHDOG_OFFLINE_DECISION", ""),
+		FailClosedVerdict: envLower("WATCHDOG_FAILCLOSED_VERDICT", ""),
 		LLMProvider:     envLower("WATCHDOG_LLM_PROVIDER", "auto"),
 		LLMModel:        strings.TrimSpace(os.Getenv("WATCHDOG_LLM_MODEL")),
 		LLMBin:          strings.TrimSpace(os.Getenv("WATCHDOG_LLM_BIN")),
@@ -110,8 +110,8 @@ func Load() (Config, error) {
 	if !validSeverities[c.MinSeverity] {
 		return c, fmt.Errorf("WATCHDOG_MIN_SEVERITY=%q: want one of none/low/medium/high/critical", c.MinSeverity)
 	}
-	if c.OfflineDecision != "" && !validOffline[c.OfflineDecision] {
-		return c, fmt.Errorf("WATCHDOG_OFFLINE_DECISION=%q: want one of allow/ask/deny", c.OfflineDecision)
+	if c.FailClosedVerdict != "" && !validFailClosed[c.FailClosedVerdict] {
+		return c, fmt.Errorf("WATCHDOG_FAILCLOSED_VERDICT=%q: want one of allow/ask/deny", c.FailClosedVerdict)
 	}
 	if !validActionFailOn[c.ActionFailOn] {
 		return c, fmt.Errorf("WATCHDOG_ACTION_FAIL_ON=%q: want one of deny/ask/never", c.ActionFailOn)

@@ -31,10 +31,12 @@ func mode() string {
 	return v
 }
 
-// Shim's offline default is `deny`, unlike the Claude Code hook
-// (`ask`), because the shim has no host UI to surface a question to.
-func offlineDecision() string {
-	v := strings.ToLower(strings.TrimSpace(os.Getenv("WATCHDOG_OFFLINE_DECISION")))
+// failClosedVerdict picks the verdict to emit when a check cannot
+// run (OSV unreachable, LLM CLI missing, analyzer panic). The shim's
+// default is `deny`, unlike the Claude Code hook (`ask`), because the
+// shim has no host UI to surface a question through.
+func failClosedVerdict() string {
+	v := strings.ToLower(strings.TrimSpace(os.Getenv("WATCHDOG_FAILCLOSED_VERDICT")))
 	switch v {
 	case "allow", "deny", "ask":
 		return v
@@ -86,7 +88,7 @@ func resolveDecision(verdict, reason string) bool {
 	if isTTY(os.Stdin) && isTTY(os.Stderr) {
 		return confirmTTY(reason)
 	}
-	fallback := offlineDecision()
+	fallback := failClosedVerdict()
 	fmt.Fprintf(os.Stderr, "watchdog: %s (no TTY, falling back to %s)\n", reason, fallback)
 	return fallback == "allow"
 }
@@ -146,8 +148,8 @@ func main() {
 	}
 
 	result := preflight.Packages(pkgs, notes, preflight.Options{
-		Mode:            mode(),
-		OfflineDecision: offlineDecision(),
+		Mode:              mode(),
+		FailClosedVerdict: failClosedVerdict(),
 	})
 	if resolveDecision(result.Verdict, result.Reason) {
 		os.Exit(execReal(real, toolname, toolArgs))
