@@ -404,6 +404,14 @@ go test -race ./...
 
 `asdf` users: `.tool-versions` pins Go 1.26.3.
 
+Releases stamp the version via ldflags so each binary reports it through `--version`:
+
+```bash
+go build -ldflags '-X github.com/Maxlemore97/watchdog/internal/version.Version=v0.5.0' ./...
+```
+
+Unstamped builds report `dev`.
+
 ---
 
 ## Testing

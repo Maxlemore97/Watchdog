@@ -18,6 +18,7 @@ import (
 	"github.com/Maxlemore97/watchdog/internal/osv"
 	"github.com/Maxlemore97/watchdog/internal/parsers"
 	"github.com/Maxlemore97/watchdog/internal/preflight"
+	"github.com/Maxlemore97/watchdog/internal/version"
 )
 
 func mode() string {
@@ -73,6 +74,9 @@ func emit(decision, reason string) {
 }
 
 func main() {
+	if version.HandleFlag(os.Args[0], os.Args[1:], os.Stdout) {
+		return
+	}
 	if config.Disabled() {
 		return
 	}

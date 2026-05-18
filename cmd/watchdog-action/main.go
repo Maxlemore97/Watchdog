@@ -21,6 +21,7 @@ import (
 	"github.com/Maxlemore97/watchdog/internal/config"
 	"github.com/Maxlemore97/watchdog/internal/ghaction"
 	"github.com/Maxlemore97/watchdog/internal/policy"
+	"github.com/Maxlemore97/watchdog/internal/version"
 )
 
 var validFailOn = map[string]bool{"deny": true, "ask": true, "never": true}
@@ -109,6 +110,9 @@ func emitFor(verdict, message string, a ghaction.Annotation) {
 }
 
 func main() {
+	if version.HandleFlag(os.Args[0], os.Args[1:], os.Stdout) {
+		return
+	}
 	_ = config.MustLoad()
 	base := baseRef()
 	head := headRef()

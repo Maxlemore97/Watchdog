@@ -17,6 +17,7 @@ import (
 	"github.com/Maxlemore97/watchdog/internal/analyzer"
 	"github.com/Maxlemore97/watchdog/internal/config"
 	"github.com/Maxlemore97/watchdog/internal/policy"
+	"github.com/Maxlemore97/watchdog/internal/version"
 )
 
 var gitURLRE = regexp.MustCompile(`^(https?://|git@|ssh://).+`)
@@ -29,6 +30,9 @@ type resultEntry struct {
 }
 
 func main() {
+	if version.HandleFlag(os.Args[0], os.Args[1:], os.Stdout) {
+		return
+	}
 	if len(os.Args) < 2 {
 		fmt.Println(`{"verdict":"ask","reason":"no target supplied"}`)
 		return
@@ -47,10 +51,10 @@ func main() {
 		plans = append(plans, plan{"plugin", target, ""})
 	case strings.Contains(target, "@") && !strings.HasPrefix(target, "@"):
 		at := strings.Index(target, "@")
-		name, version := target[:at], target[at+1:]
+		name, ver := target[:at], target[at+1:]
 		plans = append(plans,
-			plan{"npm", name, version},
-			plan{"PyPI", name, version})
+			plan{"npm", name, ver},
+			plan{"PyPI", name, ver})
 	default:
 		plans = append(plans,
 			plan{"npm", target, ""},

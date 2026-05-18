@@ -16,6 +16,7 @@ import (
 	"github.com/Maxlemore97/watchdog/internal/config"
 	"github.com/Maxlemore97/watchdog/internal/ledger"
 	"github.com/Maxlemore97/watchdog/internal/policy"
+	"github.com/Maxlemore97/watchdog/internal/version"
 )
 
 func emitContext(text string) {
@@ -57,6 +58,9 @@ func formatSummary(findings []ledger.ScanResult, skipped int) string {
 }
 
 func main() {
+	if version.HandleFlag(os.Args[0], os.Args[1:], os.Stdout) {
+		return
+	}
 	if config.Disabled() {
 		return
 	}

@@ -15,6 +15,7 @@ import (
 	"github.com/Maxlemore97/watchdog/internal/config"
 	"github.com/Maxlemore97/watchdog/internal/parsers"
 	"github.com/Maxlemore97/watchdog/internal/policy"
+	"github.com/Maxlemore97/watchdog/internal/version"
 )
 
 type promptPayload struct {
@@ -46,6 +47,9 @@ type targetVerdict struct {
 }
 
 func main() {
+	if version.HandleFlag(os.Args[0], os.Args[1:], os.Stdout) {
+		return
+	}
 	if config.Disabled() {
 		return
 	}
@@ -65,8 +69,8 @@ func main() {
 
 	var verdicts []targetVerdict
 	for _, tgt := range targets {
-		ecosystem, name, version := parsers.ClassifyPluginTarget(tgt)
-		v := analyzer.AnalyzePackage(ecosystem, name, version)
+		ecosystem, name, ver := parsers.ClassifyPluginTarget(tgt)
+		v := analyzer.AnalyzePackage(ecosystem, name, ver)
 		if v != nil {
 			verdicts = append(verdicts, targetVerdict{target: tgt, verdict: v})
 		}

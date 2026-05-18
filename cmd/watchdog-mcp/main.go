@@ -21,14 +21,18 @@ import (
 
 	"github.com/Maxlemore97/watchdog/internal/config"
 	wmcp "github.com/Maxlemore97/watchdog/internal/mcp"
+	"github.com/Maxlemore97/watchdog/internal/version"
 
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
 )
 
 func main() {
+	if version.HandleFlag(os.Args[0], os.Args[1:], os.Stdout) {
+		return
+	}
 	_ = config.MustLoad()
-	s := server.NewMCPServer("watchdog", "0.4.0")
+	s := server.NewMCPServer("watchdog", version.String())
 
 	s.AddTool(
 		mcp.NewTool("watchdog_preflight_install",

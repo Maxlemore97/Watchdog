@@ -14,16 +14,21 @@ import (
 	"github.com/Maxlemore97/watchdog/internal/paths"
 	"github.com/Maxlemore97/watchdog/internal/providers"
 	"github.com/Maxlemore97/watchdog/internal/shim"
+	"github.com/Maxlemore97/watchdog/internal/version"
 )
 
 func usage() {
 	fmt.Fprintln(os.Stderr, `watchdog-shim install   [--dir DIR] [--no-overwrite]
 watchdog-shim uninstall [--dir DIR]
 watchdog-shim status    [--dir DIR]
-watchdog-shim doctor`)
+watchdog-shim doctor
+watchdog-shim --version`)
 }
 
 func main() {
+	if version.HandleFlag(os.Args[0], os.Args[1:], os.Stdout) {
+		return
+	}
 	if len(os.Args) < 2 {
 		usage()
 		os.Exit(2)
@@ -132,6 +137,7 @@ func cmdDoctor(args []string) int {
 		target = v
 	}
 	fmt.Println("watchdog-shim doctor:")
+	fmt.Printf("  --  watchdog-shim version: %s\n", version.String())
 
 	// 1. shim dir on PATH and first
 	pathEnv := os.Getenv("PATH")
