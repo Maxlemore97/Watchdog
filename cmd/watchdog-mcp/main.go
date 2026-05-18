@@ -19,22 +19,44 @@ package main
 
 import (
 	"context"
+	"flag"
 	"fmt"
+	"net"
+	"net/http"
+	"net/url"
 	"os"
+	"path/filepath"
+	"strings"
 
+	"github.com/Maxlemore97/watchdog/internal/audit"
 	"github.com/Maxlemore97/watchdog/internal/config"
 	"github.com/Maxlemore97/watchdog/internal/decisions"
 	wmcp "github.com/Maxlemore97/watchdog/internal/mcp"
+	"github.com/Maxlemore97/watchdog/internal/paths"
 	"github.com/Maxlemore97/watchdog/internal/version"
 
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
 )
 
+// listenAddr is the configured value of --listen (or
+// $WATCHDOG_DAEMON_LISTEN). Empty means stdio mode (default). Special
+// values:
+//
+//	"auto"             → unix://$WATCHDOG_DIR/mcp.sock
+//	"unix:///abs.sock" → AF_UNIX listener at /abs.sock (mode 0600)
+//	"tcp://host:port"  → TCP listener; refused unless host is loopback
+var listenAddr string
+
 func main() {
 	if version.HandleFlag(os.Args[0], os.Args[1:], os.Stdout) {
 		return
 	}
+	flag.StringVar(&listenAddr, "listen", os.Getenv("WATCHDOG_DAEMON_LISTEN"),
+		"address to serve over HTTP+SSE instead of stdio; "+
+			"e.g., 'auto', 'unix:///path/to/sock', 'tcp://127.0.0.1:7274'")
+	flag.Parse()
+
 	_ = config.MustLoad()
 	// Sweep stale decision tokens at startup — keeps the cache dir
 	// bounded if a previous MCP run died before its tokens expired.
@@ -115,10 +137,113 @@ func main() {
 		handleHealth,
 	)
 
-	if err := server.ServeStdio(s); err != nil {
-		fmt.Fprintf(os.Stderr, "watchdog-mcp: serve: %v\n", err)
+	if listenAddr == "" {
+		if err := server.ServeStdio(s); err != nil {
+			fmt.Fprintf(os.Stderr, "watchdog-mcp: serve: %v\n", err)
+			os.Exit(1)
+		}
+		return
+	}
+	if err := serveDaemon(s, listenAddr); err != nil {
+		fmt.Fprintf(os.Stderr, "watchdog-mcp daemon: %v\n", err)
 		os.Exit(1)
 	}
+}
+
+// serveDaemon listens at addr and serves the MCP protocol over
+// Streamable HTTP (POST + SSE) on the `/mcp` path. Supports two
+// transports:
+//
+//   - unix://PATH — AF_UNIX socket. Filesystem perms (0600) act as
+//     authentication; only the owning user can connect.
+//   - tcp://HOST:PORT — Non-loopback hosts are refused to avoid
+//     accidentally exposing watchdog-mcp to the network. Token-based
+//     auth for TCP is a follow-up.
+//
+// "auto" expands to unix://$WATCHDOG_DIR/mcp.sock.
+func serveDaemon(s *server.MCPServer, addr string) error {
+	listener, displayAddr, err := buildDaemonListener(addr)
+	if err != nil {
+		return err
+	}
+
+	httpServer := server.NewStreamableHTTPServer(s)
+	mux := http.NewServeMux()
+	mux.Handle("/mcp", httpServer)
+	mux.Handle("/mcp/", httpServer)
+
+	srv := &http.Server{Handler: mux}
+
+	audit.Record("daemon.start", map[string]any{
+		"addr": displayAddr,
+	})
+	fmt.Fprintf(os.Stderr, "watchdog-mcp daemon: listening on %s\n", displayAddr)
+
+	defer func() {
+		audit.Record("daemon.stop", map[string]any{"addr": displayAddr})
+	}()
+	return srv.Serve(listener)
+}
+
+// buildDaemonListener parses addr and returns a net.Listener plus a
+// human-readable display string for logs. The display string is the
+// canonical scheme://path form, even for "auto".
+func buildDaemonListener(addr string) (net.Listener, string, error) {
+	if addr == "auto" {
+		addr = "unix://" + filepath.Join(paths.WatchdogDir(), "mcp.sock")
+	}
+	if strings.HasPrefix(addr, "unix://") {
+		sockPath := strings.TrimPrefix(addr, "unix://")
+		if sockPath == "" {
+			return nil, "", fmt.Errorf("unix:// scheme needs a socket path")
+		}
+		// Remove a leftover socket from a previous run; Listen would
+		// otherwise fail with EADDRINUSE.
+		_ = os.Remove(sockPath)
+		if err := os.MkdirAll(filepath.Dir(sockPath), 0o755); err != nil {
+			return nil, "", fmt.Errorf("mkdir for socket: %w", err)
+		}
+		l, err := net.Listen("unix", sockPath)
+		if err != nil {
+			return nil, "", fmt.Errorf("listen unix %s: %w", sockPath, err)
+		}
+		// Restrict to owner so other local users can't connect.
+		if err := os.Chmod(sockPath, 0o600); err != nil {
+			_ = l.Close()
+			return nil, "", fmt.Errorf("chmod 0600 %s: %w", sockPath, err)
+		}
+		return l, "unix://" + sockPath, nil
+	}
+
+	if strings.HasPrefix(addr, "tcp://") {
+		raw := strings.TrimPrefix(addr, "tcp://")
+		u, err := url.Parse("tcp://" + raw)
+		if err != nil || u.Host == "" {
+			return nil, "", fmt.Errorf("tcp:// scheme needs host:port, got %q", addr)
+		}
+		host := u.Hostname()
+		if !isLoopback(host) {
+			return nil, "", fmt.Errorf("tcp:// must bind to a loopback host (127.0.0.1 / ::1 / localhost), got %q", host)
+		}
+		l, err := net.Listen("tcp", u.Host)
+		if err != nil {
+			return nil, "", fmt.Errorf("listen tcp %s: %w", u.Host, err)
+		}
+		return l, "tcp://" + u.Host, nil
+	}
+
+	return nil, "", fmt.Errorf("unsupported --listen scheme: %q (want auto, unix://, or tcp://)", addr)
+}
+
+// isLoopback reports whether host resolves to a loopback address.
+// Accepts hostnames as well as literal IPs.
+func isLoopback(host string) bool {
+	switch strings.ToLower(host) {
+	case "127.0.0.1", "::1", "localhost":
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
 }
 
 // ---------- SDK glue: argument extraction + Result marshaling -----

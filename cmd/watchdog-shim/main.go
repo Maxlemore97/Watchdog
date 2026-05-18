@@ -16,6 +16,7 @@ import (
 
 	"github.com/Maxlemore97/watchdog/internal/audit"
 	"github.com/Maxlemore97/watchdog/internal/cli"
+	"github.com/Maxlemore97/watchdog/internal/daemon"
 	"github.com/Maxlemore97/watchdog/internal/hosts"
 	"github.com/Maxlemore97/watchdog/internal/integrity"
 	"github.com/Maxlemore97/watchdog/internal/paths"
@@ -25,12 +26,13 @@ import (
 )
 
 func usage() {
-	fmt.Fprintln(os.Stderr, `watchdog-shim install     [--dir DIR] [--no-overwrite]
+	fmt.Fprintln(os.Stderr, `watchdog-shim install     [--dir DIR] [--no-overwrite] [--register | --no-register | -y]
 watchdog-shim uninstall   [--dir DIR]
 watchdog-shim status      [--dir DIR]
 watchdog-shim doctor      [--llm-smoke] [--llm-smoke-timeout=DUR]
 watchdog-shim register    [--host=NAME] [--all]
 watchdog-shim unregister  [--host=NAME] [--all]
+watchdog-shim daemon      install [--listen=ADDR] | uninstall | status
 watchdog-shim cache       stats | clear [--type=llm|osv|all] [--older-than=DUR] [--dry-run]
 watchdog-shim --version`)
 }
@@ -58,6 +60,8 @@ func main() {
 		os.Exit(cmdRegister(rest))
 	case "unregister":
 		os.Exit(cmdUnregister(rest))
+	case "daemon":
+		os.Exit(cmdDaemon(rest))
 	case "cache":
 		os.Exit(cmdCache(rest))
 	default:
@@ -466,6 +470,92 @@ func cmdRegister(args []string) int {
 		fmt.Printf("Registered watchdog-mcp with %s (%s)\n", h.Name(), h.ConfigPath())
 	}
 	return rc
+}
+
+// cmdDaemon dispatches the `watchdog-shim daemon …` subcommands.
+// Available verbs: install [--listen=ADDR], uninstall, status.
+func cmdDaemon(args []string) int {
+	if len(args) < 1 {
+		fmt.Fprintln(os.Stderr,
+			"daemon: subcommand required (install | uninstall | status)")
+		return 2
+	}
+	verb := args[0]
+	rest := args[1:]
+	switch verb {
+	case "install":
+		return cmdDaemonInstall(rest)
+	case "uninstall":
+		return cmdDaemonUninstall(rest)
+	case "status":
+		return cmdDaemonStatus(rest)
+	default:
+		fmt.Fprintf(os.Stderr, "daemon: unknown subcommand %q\n", verb)
+		return 2
+	}
+}
+
+func cmdDaemonInstall(args []string) int {
+	fs := flag.NewFlagSet("daemon install", flag.ExitOnError)
+	listen := fs.String("listen", "auto",
+		"address to serve on (auto = unix://~/.watchdog/mcp.sock; tcp://127.0.0.1:PORT; unix:///path)")
+	logPath := fs.String("log", filepath.Join(paths.WatchdogDir(), "daemon.log"),
+		"path for daemon stderr/stdout; empty disables")
+	_ = fs.Parse(args)
+	execPath := resolveMCPExec()
+	if execPath == "" {
+		fmt.Fprintln(os.Stderr, "daemon install: watchdog-mcp binary not found on PATH")
+		return 1
+	}
+	st, err := daemon.Install(daemon.Options{
+		ExecPath:   execPath,
+		ListenAddr: *listen,
+		LogPath:    *logPath,
+	})
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "daemon install: %v\n", err)
+		return 1
+	}
+	audit.Record("daemon.installed", map[string]any{
+		"listen":       *listen,
+		"service_file": st.ServiceFilePath,
+		"exec_path":    execPath,
+	})
+	fmt.Printf("Installed watchdog-mcp daemon: %s\n", st.ServiceFilePath)
+	if st.Detail != "" {
+		fmt.Printf("  %s\n", st.Detail)
+	}
+	return 0
+}
+
+func cmdDaemonUninstall(args []string) int {
+	_ = args
+	st, err := daemon.Uninstall()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "daemon uninstall: %v\n", err)
+		return 1
+	}
+	audit.Record("daemon.uninstalled", map[string]any{
+		"service_file": st.ServiceFilePath,
+	})
+	fmt.Printf("Daemon: %s\n", st.Detail)
+	return 0
+}
+
+func cmdDaemonStatus(args []string) int {
+	_ = args
+	st, err := daemon.CurrentStatus()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "daemon status: %v\n", err)
+		return 1
+	}
+	fmt.Printf("Service file: %s\n", st.ServiceFilePath)
+	fmt.Printf("Installed:    %t\n", st.Installed)
+	fmt.Printf("Active:       %t\n", st.Active)
+	if st.Detail != "" {
+		fmt.Printf("Detail:       %s\n", st.Detail)
+	}
+	return 0
 }
 
 func cmdUnregister(args []string) int {

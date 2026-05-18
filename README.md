@@ -277,7 +277,17 @@ jq -c 'select(.event | startswith("integrity") or startswith("tamper"))' \
    ~/.watchdog/audit.jsonl
 ```
 
-**What this gives you.** A filesystem-write adversary can still rewrite both the manifest and the verifier — Watchdog is not signed code. The deterrent is that every tamper step produces an audit-log entry before the chain breaks, and that single-step bypasses (`rm /usr/local/bin/watchdog-pretool`) get caught by the manifest-aware hook fallback. Cryptographic signing is a v2 target; see [Threat model](#threat-model).
+**Ed25519 signing.** Manifests and decision tokens are signed with a per-install local keypair generated at `watchdog-shim install` time and stored at `~/.watchdog/.signing.{key,pub}` (private 0600, public 0644). On verification:
+
+- `SIGNATURE_INVALID` — manifest content changed without re-signing → hard fail, deny installs.
+- `SIGNATURE_KEY_MISSING` — manifest claims a signature but `~/.watchdog/.signing.pub` is gone → hard fail.
+- `SIGNATURE_MISSING` — legacy v1 manifest (pre-signing) → soft warning; next install upgrades it.
+
+Decision tokens follow the same pattern. Unsigned or invalid tokens are rejected (`ErrUnsignedToken`); the shim falls back to a fresh preflight. A filesystem-write attacker who also reads `~/.watchdog/.signing.key` can still forge signatures — local-key signing is *detection*, not prevention.
+
+**Build-time baseline (scaffolded).** Each binary embeds `integrity.BaselinePubKey` via `-ldflags '-X .../integrity.BaselinePubKey=…'`. At release time, CI signs a `baseline.json` listing the expected sha256 of every binary. `VerifyDeep` checks each binary's hash against the signed baseline. Drift fails with `BASELINE_BINARY_DRIFT`; missing baseline on a stamped build fails with `BASELINE_MISSING`. Unstamped builds (`go install` without ldflags) skip baseline verification silently. The verification path ships today; wiring the release CI to actually sign `baseline.json` is a follow-up that needs a GitHub secret for the release private key.
+
+**What this gives you.** A filesystem-write adversary with both keys still wins. The combined model raises the bar by one well-defined step: tamper that doesn't re-sign gets caught, and tamper that swaps in a different binary gets caught by the baseline. The audit log records every step.
 
 ---
 
@@ -337,7 +347,34 @@ If you'd rather hand-edit the config, the shape is:
 }
 ```
 
-Currently supported hosts for auto-registration: Claude Desktop and Cursor. Other MCP-aware hosts (Continue, Cline, Zed) still work — they just need the JSON edited manually.
+Auto-registration covers Claude Desktop, Cursor, Continue, Cline, and Zed. Each uses its native config:
+
+- **Continue**: `~/.continue/config.yaml` (or `.yml` / `.json` — detected automatically). YAML round-trip via `gopkg.in/yaml.v3` does not preserve comments.
+- **Cline**: VS Code's extension storage path (`~/Library/Application Support/Code/.../saoudrizwan.claude-dev/.../cline_mcp_settings.json` on macOS; `~/.config/Code/...` on Linux).
+- **Zed**: `~/.config/zed/settings.json` with the `context_servers` key (not `mcpServers`) and the nested `{source, command:{path, args}}` shape.
+
+`watchdog-shim install` runs the registration prompt automatically when stdin is a TTY. Use `--register` / `-y` to skip the prompt and accept; `--no-register` to skip the prompt and decline. Non-TTY contexts (CI) get a one-line hint instead of hanging.
+
+### Daemon mode
+
+`watchdog-mcp` defaults to stdio — one child process per MCP host session. For machines that run several MCP-aware hosts, you can run a single long-lived server that speaks HTTP+SSE over a unix socket instead, supervised by launchd (macOS) or systemd --user (Linux):
+
+```bash
+# Render the service file, register with the supervisor, start the daemon
+watchdog-shim daemon install --listen=auto
+
+# Inspect
+watchdog-shim daemon status
+
+# Remove
+watchdog-shim daemon uninstall
+```
+
+`--listen=auto` resolves to `unix://$WATCHDOG_DIR/mcp.sock` with mode `0600`. You can pass `tcp://127.0.0.1:PORT` instead (non-loopback hosts are refused); TCP auth is a follow-up.
+
+Daemon mode is mainly useful for hosts that natively speak HTTP/SSE MCP. Hosts that only spawn stdio children (Claude Desktop, Cursor today) keep using the existing stdio registration. A stdio↔HTTP proxy that bridges the two is planned.
+
+Windows daemon mode is not yet supported.
 
 ### MCP↔shim coordination
 
@@ -397,6 +434,7 @@ Everything's an env var. Defaults are sensible; nothing's required.
 | `WATCHDOG_AUDIT_LOG`            | `$WATCHDOG_DIR/audit.jsonl`   | Override the tamper / integrity audit log path                                                    |
 | `WATCHDOG_DECISION_TTL`         | `60`                          | MCP→shim decision-token lifetime in seconds                                                       |
 | `WATCHDOG_MCP_HANDLER_TIMEOUT`  | `60`                          | Per-tool ceiling for MCP handlers (seconds)                                                       |
+| `WATCHDOG_DAEMON_LISTEN`        | —                             | Default --listen value for the watchdog-mcp daemon (e.g., `auto`, `tcp://127.0.0.1:7274`)         |
 
 ---
 
@@ -420,6 +458,10 @@ The tamper / integrity audit log at `~/.watchdog/audit.jsonl` (separate from `WA
 - `mcp.tool.start` / `.ok` / `.error` / `.panic` / `.timeout` — one pair per MCP handler invocation.
 - `decision.written` (MCP) / `decision.consumed` (shim) / `.expired` / `.miss` / `.gc` — decision-token cache lifecycle.
 - `host.registered` / `host.unregistered` — `watchdog-shim register` / `unregister`.
+- `install.registered_via_prompt` / `install.register_skipped` — auto-prompt path during `watchdog-shim install`.
+- `daemon.start` / `daemon.stop` — watchdog-mcp daemon process lifecycle.
+- `daemon.installed` / `daemon.uninstalled` — `watchdog-shim daemon install` / `uninstall`.
+- `manifest.unsigned` / `decision.unsigned` — a v1 manifest or token was rejected for missing signature (transition signal during the v1→v2 rollout).
 
 Quick budget estimate, given `WATCHDOG_LOG=/tmp/watchdog.jsonl`:
 
@@ -488,6 +530,7 @@ internal/
   paths/      cache_dir / watchdog_dir / manifest / audit-log resolution
   log/        opt-in JSON-line event log
   audit/      always-on tamper / integrity audit log
+  cli/        shared TTY-detection helper
   policy/     verdict ranking + worst-wins
   osv/        OSV.dev query, severity, version resolution
   parsers/    install command lexer + plugin prompt parser + tamper-pattern detector
@@ -497,10 +540,11 @@ internal/
   ledger/     persistent plugin vetting ledger
   preflight/  shared OSV+LLM aggregator
   shim/       wrapper templates, FindRealBinary
-  integrity/  install-time manifest + Verify / VerifyDeep
-  decisions/  short-TTL MCP↔shim handoff cache
-  hosts/      register / unregister watchdog-mcp with detected hosts
+  integrity/  install-time manifest + Verify / VerifyDeep + Ed25519 signing + baseline
+  decisions/  short-TTL MCP↔shim handoff cache (signed)
+  hosts/      register watchdog-mcp with detected MCP hosts (5 adapters)
   mcp/        pure-Go handlers + Guard (panic / timeout / audit)
+  daemon/     launchd plist / systemd unit templates for daemon mode
   ghaction/   workflow command emitter, path classifiers
   urlenc/     shared URL-path escaper
   config/     env validation + Disabled() helper
