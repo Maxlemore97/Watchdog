@@ -23,6 +23,10 @@ func (o InstallOpts) dir() string {
 	return DefaultShimDir()
 }
 
+// tools returns the explicit Tools override when set, otherwise the
+// effective set from env. Used by Status/Uninstall paths where a
+// silent fallback is acceptable; Install resolves the set up-front in
+// the CLI so env-var errors surface to the user.
 func (o InstallOpts) tools() []string {
 	if len(o.Tools) > 0 {
 		return o.Tools

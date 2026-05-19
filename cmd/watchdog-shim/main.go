@@ -112,8 +112,14 @@ func cmdInstall(args []string) int {
 	if target == "" {
 		target = shim.DefaultShimDir()
 	}
+	tools, err := shim.EffectiveShimmedToolsFromEnv()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "install failed: %v\n", err)
+		return 1
+	}
 	written, err := shim.Install(shim.InstallOpts{
 		ShimDir:   f.dir,
+		Tools:     tools,
 		Overwrite: f.overwrite,
 	})
 	if err != nil {
