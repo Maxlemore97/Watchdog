@@ -408,7 +408,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with: { fetch-depth: 0 }
-      - uses: Maxlemore97/Watchdog@v1
+      - uses: Maxlemore97/Watchdog@v0.6.0
         with:
           fail-on: deny     # deny | ask | never
 ```
