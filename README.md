@@ -135,7 +135,14 @@ The shims are PATH-prepend wrappers. Without them, Watchdog only fires inside Cl
 | `go` | `install <mod>@<ver>` | `Go` | proxy.golang.org zip |
 | `dotnet` | `add [<proj>] package` three-word | `NuGet` | api.nuget.org `.nupkg` |
 
-Scope the set with `WATCHDOG_SHIMMED_TOOLS_ADD` and `WATCHDOG_SHIMMED_TOOLS_SKIP` (comma-separated, names validated against the parser's known set at install time; unknown names fail loudly).
+Scope the set with `WATCHDOG_SHIMMED_TOOLS_ADD` and `WATCHDOG_SHIMMED_TOOLS_SKIP` (comma-separated). Names are validated against the parser's known set (`parsers.EcosystemByCmd`) at install time; an unknown name fails the install rather than writing a dead wrapper:
+
+```bash
+$ WATCHDOG_SHIMMED_TOOLS_ADD=notarealpm watchdog-shim install
+install failed: unknown tool name(s) in WATCHDOG_SHIMMED_TOOLS_ADD/_SKIP: notarealpm (valid: see parsers.EcosystemByCmd)
+$ echo $?
+1
+```
 
 ```bash
 watchdog-shim install
@@ -462,8 +469,8 @@ Everything's an env var. Defaults are sensible; nothing's required.
 | `WATCHDOG_DECISION_TTL`         | `60`                          | MCP→shim decision-token lifetime in seconds                                                       |
 | `WATCHDOG_MCP_HANDLER_TIMEOUT`  | `60`                          | Per-tool ceiling for MCP handlers (seconds)                                                       |
 | `WATCHDOG_DAEMON_LISTEN`        | —                             | Default --listen value for the watchdog-mcp daemon (e.g., `auto`, `tcp://127.0.0.1:7274`)         |
-| `WATCHDOG_SHIMMED_TOOLS_ADD`    | —                             | Comma-separated tool names to add to the default shim set (e.g., `WATCHDOG_SHIMMED_TOOLS_ADD=helm`) |
-| `WATCHDOG_SHIMMED_TOOLS_SKIP`   | —                             | Comma-separated tool names to drop from the default shim set (e.g., `WATCHDOG_SHIMMED_TOOLS_SKIP=go,brew`) |
+| `WATCHDOG_SHIMMED_TOOLS_ADD`    | —                             | Comma-separated tool names to add to the default shim set. Unknown names → `watchdog-shim install` exits 1 |
+| `WATCHDOG_SHIMMED_TOOLS_SKIP`   | —                             | Comma-separated tool names to drop from the default shim set. Same validation as ADD |
 
 ---
 
