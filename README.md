@@ -262,6 +262,18 @@ watchdog-scan project . --packages-only  # skip the plugin/skill walk
 
 Lockfiles parsed: `package-lock.json`, `pnpm-lock.yaml`, `Pipfile.lock`, `poetry.lock`, `uv.lock`, `Cargo.lock`, `Gemfile.lock`, `composer.lock`, `go.mod`, `packages.lock.json`. Bare manifests without a lockfile are skipped (pinned versions only) and surfaced as a note. Plugin roots detected: any directory holding `.claude-plugin/`, `skills/`, `commands/`, `hooks/`, or a top-level `plugin.json`. Standalone `CLAUDE.md` / `agents.md` files are listed in the report. Exit code follows the worst verdict (0 for `allow`, 1 for `ask` / `deny`).
 
+### Scan locally installed Claude Code plugins
+
+`watchdog-scan local` is the no-argument shortcut for "audit whatever plugins this host already has installed". Resolves roots from `WATCHDOG_PLUGIN_DIRS` (`:` / `;` separated), then `CLAUDE_PLUGINS_DIR`, then `~/.claude/plugins/`; runs the analyzer on every plugin child and aggregates the worst verdict. Same content-addressed cache as the install path, so a repeat scan with no on-disk changes is sub-second.
+
+```bash
+watchdog-scan local                          # auto-discover roots, JSON output
+watchdog-scan local --format=text            # human-readable summary
+watchdog-scan local --root /some/other/dir   # repeatable: append extra root(s)
+```
+
+In Claude Code, the same scan is exposed as the `/watchdog-scan-local` slash command (auto-discovered from `commands/watchdog-scan-local.md`).
+
 ---
 
 ## How a verdict is decided

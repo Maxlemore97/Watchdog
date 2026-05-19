@@ -45,6 +45,9 @@ func main() {
 	if os.Args[1] == "project" {
 		os.Exit(runProject(os.Args[2:]))
 	}
+	if os.Args[1] == "local" {
+		os.Exit(runLocal(os.Args[2:]))
+	}
 
 	target := strings.TrimSpace(os.Args[1])
 
@@ -172,3 +175,48 @@ func runProject(args []string) int {
 	}
 	return 0
 }
+
+// runLocal handles `watchdog-scan local [flags]`. Auto-discovers
+// Claude Code plugin roots (WATCHDOG_PLUGIN_DIRS, CLAUDE_PLUGINS_DIR,
+// ~/.claude/plugins) and reuses the project-scan plugin loop. No
+// positional argument; --root may be passed multiple times to append
+// additional roots.
+func runLocal(args []string) int {
+	fs := flag.NewFlagSet("local", flag.ContinueOnError)
+	format := fs.String("format", "json", "output format: json or text")
+	roots := stringList{}
+	fs.Var(&roots, "root", "additional plugin root (repeatable)")
+	if err := fs.Parse(args); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 2
+	}
+	result, err := projectscan.RunLocal(projectscan.LocalOpts{
+		ExtraRoots: roots,
+		Format:     *format,
+	})
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "local scan failed: %v\n", err)
+		return 2
+	}
+	switch *format {
+	case "text":
+		fmt.Printf("verdict: %s\n", result.Verdict)
+		fmt.Printf("plugins: %s  (%d scanned)\n", result.Plugins.Verdict, result.Plugins.Scanned)
+		for _, n := range result.Notes {
+			fmt.Printf("  %s\n", n)
+		}
+	default:
+		data, _ := json.MarshalIndent(result, "", "  ")
+		fmt.Println(string(data))
+	}
+	if policy.Rank(result.Verdict) >= policy.Rank("ask") {
+		return 1
+	}
+	return 0
+}
+
+// stringList implements flag.Value so --root can be repeated.
+type stringList []string
+
+func (s *stringList) String() string         { return strings.Join(*s, ",") }
+func (s *stringList) Set(v string) error     { *s = append(*s, v); return nil }

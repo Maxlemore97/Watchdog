@@ -73,10 +73,20 @@ func Run(opts ScanOpts) (*Result, error) {
 		r.Plugins = scanPlugins(disc.PluginRoots)
 	}
 
-	r.Verdict = policy.WorstVerdict([]string{r.Packages.Verdict, r.Plugins.Verdict})
-	if r.Verdict == "" {
-		// Both phases skipped or no inputs → allow.
+	// Drop empty sub-verdicts (phase skipped via --packages-only /
+	// --plugins-only) before aggregating; policy.WorstVerdict treats
+	// unknown strings as "ask", so an empty would poison the result.
+	agg := []string{}
+	if r.Packages.Verdict != "" {
+		agg = append(agg, r.Packages.Verdict)
+	}
+	if r.Plugins.Verdict != "" {
+		agg = append(agg, r.Plugins.Verdict)
+	}
+	if len(agg) == 0 {
 		r.Verdict = "allow"
+	} else {
+		r.Verdict = policy.WorstVerdict(agg)
 	}
 	r.ElapsedMs = time.Since(start).Milliseconds()
 
@@ -150,11 +160,60 @@ func scanPlugins(roots []string) PluginsResult {
 		}
 		out.Findings = append(out.Findings, finding)
 	}
-	out.Verdict = policy.WorstVerdict(verdicts)
-	if out.Verdict == "" {
+	if len(verdicts) == 0 {
 		out.Verdict = "allow"
+	} else {
+		out.Verdict = policy.WorstVerdict(verdicts)
 	}
 	return out
+}
+
+// RunLocal walks the local plugin-root set (~/.claude/plugins by
+// default, env-overridable) and runs AnalyzeLocalPlugin per plugin
+// child. Mirrors Run's Result shape — Packages stays empty (no dep
+// surface in a host's plugin dir), Plugins carries the per-plugin
+// findings. The content-addressed analyzer cache makes a repeat
+// run sub-second when nothing on disk changed.
+func RunLocal(opts LocalOpts) (*Result, error) {
+	start := time.Now()
+	roots := LocalRoots(opts)
+	r := &Result{
+		Root:  "local",
+		Notes: []string{},
+	}
+	if len(roots) == 0 {
+		r.Verdict = "allow"
+		r.Notes = append(r.Notes, "no plugin roots found (set WATCHDOG_PLUGIN_DIRS or install plugins under ~/.claude/plugins/)")
+		r.Plugins = PluginsResult{Verdict: "allow", Findings: []map[string]any{}}
+		r.ElapsedMs = time.Since(start).Milliseconds()
+		log.Event("projectscan_local_completed", map[string]any{
+			"verdict":    r.Verdict,
+			"scanned":    0,
+			"elapsed_ms": r.ElapsedMs,
+		})
+		return r, nil
+	}
+
+	plugins := ledger.Discover(roots)
+	pluginDirs := make([]string, 0, len(plugins))
+	for _, p := range plugins {
+		pluginDirs = append(pluginDirs, p.Path)
+	}
+	r.Plugins = scanPlugins(pluginDirs)
+	r.Verdict = r.Plugins.Verdict
+	r.Notes = append(r.Notes, "scanned roots:")
+	for _, root := range roots {
+		r.Notes = append(r.Notes, "  "+root)
+	}
+	r.ElapsedMs = time.Since(start).Milliseconds()
+
+	log.Event("projectscan_local_completed", map[string]any{
+		"verdict":    r.Verdict,
+		"scanned":    r.Plugins.Scanned,
+		"roots":      len(roots),
+		"elapsed_ms": r.ElapsedMs,
+	})
+	return r, nil
 }
 
 func dedupePackages(in []types.Package) []types.Package {
