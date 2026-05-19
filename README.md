@@ -92,7 +92,7 @@ Pick whichever applies.
 curl -fsSL https://raw.githubusercontent.com/Maxlemore97/Watchdog/main/install.sh | sh
 ```
 
-Pulls the latest release for your OS+arch, verifies SHA-256 against the published `checksums.txt`, and drops eight binaries into `~/.local/bin`. Override the destination with `WATCHDOG_INSTALL_DIR`. Pin a version with `WATCHDOG_VERSION=v0.4.0 sh install.sh`.
+Pulls the latest release for your OS+arch, verifies SHA-256 against the published `checksums.txt`, and drops eight binaries into `~/.local/bin`. Override the destination with `WATCHDOG_INSTALL_DIR`. Pin a version with `WATCHDOG_VERSION=v0.6.0 sh install.sh`.
 
 ### B. Install script (Windows PowerShell)
 
@@ -580,7 +580,7 @@ go test -race ./...
 Releases stamp the version via ldflags so each binary reports it through `--version`:
 
 ```bash
-go build -ldflags '-X github.com/Maxlemore97/watchdog/internal/version.Version=v0.5.0' ./...
+go build -ldflags '-X github.com/Maxlemore97/watchdog/internal/version.Version=v0.6.0' ./...
 ```
 
 Unstamped builds report `dev`. Release builds may additionally stamp `internal/integrity.BaselinePubKey` with a base64 Ed25519 verifier public key — when set, every binary checks `~/.watchdog/baseline.json` against its release signature and reports drift via `BASELINE_BINARY_DRIFT`. Unstamped builds skip baseline verification silently.
