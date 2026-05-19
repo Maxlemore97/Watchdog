@@ -467,6 +467,21 @@ func AnalyzePackage(ecosystem, name, version string) (result map[string]any) {
 		evt.route = "prefilter"
 		return v
 	}
+	// Scope: an LLM can't beat OSV + Snyk/Socket at finding CVEs in
+	// published-package source. The analyzer fires only when the
+	// fetcher surfaced install-hook content (postinstall scripts,
+	// setup.py, build.rs, gem ext/Rakefile, Homebrew formula JSON).
+	// Empty bundles short-circuit to allow; the OSV pass has already
+	// covered known vulns.
+	if len(bundle.Files) == 0 {
+		v := map[string]any{
+			"verdict": "allow",
+			"reason":  "no install hooks; source-code review delegated to OSV + dependency scanners",
+		}
+		cacheStore(key, v)
+		evt.route = "no_install_hooks"
+		return v
+	}
 	prompt := buildUserPrompt(bundle)
 	output, prov, cfg, err := providers.InvokeLLM(prompt, SystemPrompt)
 	evt.provider = prov.Name

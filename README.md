@@ -2,7 +2,7 @@
 
 # Watchdog
 
-Checks package installs before they actually run. When an AI agent decides to `npm install` something for you (or `pip`, `cargo`, `gem`, `bun`, etc.), Watchdog intercepts the command, asks OSV.dev about known CVEs, and optionally feeds the artifact to your configured LLM for a source review. You get `allow`, `ask`, or `deny` back before anything lands on disk.
+Checks package installs before they actually run. When an AI agent decides to `npm install` something for you (or `pip`, `cargo`, `gem`, `bun`, etc.), Watchdog intercepts the command, asks OSV.dev about known CVEs, and — when the package ships install-time exec surface (`postinstall`, `setup.py`, `build.rs`, gem ext, Homebrew scriptlets) — feeds *only those hooks* to your configured LLM. Source-code review is left to OSV + Snyk/Socket-class scanners, which already do that job better. You get `allow`, `ask`, or `deny` back before anything lands on disk.
 
 Static Go binary. Linux, macOS, Windows.
 
@@ -21,12 +21,12 @@ Works with Claude Code, Claude Desktop, Cursor, Continue, Zed, OpenCode, Aider, 
 
 `npm audit`, Snyk, and Dependabot all inspect manifest edits in your repository. They don't see the install command an agent types at a prompt. They also don't see a plugin that drops a hostile skill into `~/.claude/` or wherever your host stores extensions.
 
-Watchdog sits in front of that. The check runs in two stages:
+Watchdog sits in front of that. Two surfaces, two tools:
 
-1. OSV.dev lookup. Cached, parallel, no LLM involved.
-2. If OSV is clean, an LLM source review on a curated subset of the artifact's files. The model is asked to look for typosquats, malicious `postinstall` scripts, obfuscated payloads, credential-stealing skills, and so on.
+1. **Dep CVEs → OSV.dev.** Cached, parallel, no LLM involved. An LLM can't beat OSV + Snyk/Socket at known-vuln detection, so Watchdog doesn't try.
+2. **Natural-language attack surface → LLM.** Install hooks (`preinstall` / `postinstall` scripts, `setup.py`, `build.rs`, gem `extconf.rb` / `Rakefile`, Homebrew formula scriptlets) and Claude Code agent artifacts (skills, commands, hooks, plugins). These are text, not compiled code; no CVE database covers them. The model looks for typosquats, exfil patterns, credential-stealing skills, prompt-injection bait, install-time persistence.
 
-Worst verdict across the packages in a command wins. If OSV is unreachable, the LLM CLI isn't installed, or the analyzer times out, the default is `ask`. There's no path where Watchdog silently allows something it couldn't check.
+A published package with no install hooks short-circuits to `allow` after OSV — Watchdog does not re-scan source files that Snyk/Socket already cover. Worst verdict across the packages in a command wins. If OSV is unreachable, the LLM CLI isn't installed, or the analyzer times out, the default is `ask`. There's no path where Watchdog silently allows something it couldn't check.
 
 Beyond the verdict, an Ed25519-signed integrity manifest detects tampering with Watchdog's own state — binaries, shim wrappers, decision tokens. The hook wrappers fail-closed on tamper instead of silently passing. See [Tamper resistance](#tamper-resistance).
 
@@ -253,7 +253,7 @@ All four share `~/.cache/watchdog/`, so a plugin vetted by one adapter is recogn
 
 ## How a verdict is decided
 
-Every adapter funnels into the same pipeline. OSV runs first because it's quick and cached; an OSV deny short-circuits the rest. A clean OSV result still goes through a deterministic prefilter (PEM keys, AWS / GitHub / OpenAI / Slack token shapes, `curl … | sh`, env-piped-to-network). Only clean prefilter output reaches the LLM stage.
+Every adapter funnels into the same pipeline. OSV runs first because it's quick and cached; an OSV deny short-circuits the rest. A clean OSV result still goes through a deterministic prefilter (PEM keys, AWS / GitHub / OpenAI / Slack token shapes, `curl … | sh`, env-piped-to-network). Only clean prefilter output reaches the LLM stage, and only when the fetcher surfaced install-hook content (or for the agent-artifact paths, plugin / skill / command / hook text). Empty bundles short-circuit to `allow` — Snyk/Socket cover the source code.
 
 The parser dispatches on the package-manager binary and its install verb. Most verbs are single tokens (`npm install`, `pip install`, `cargo add`); two multi-word forms are special-cased: `uv pip install` and `dotnet add [<project>] package`. Ecosystems with no OSV mapping (`brew`, plus the special `plugin` ecosystem used by Claude Code plugin installs) skip the OSV step and run straight into the LLM stage on registry metadata.
 
@@ -270,7 +270,9 @@ flowchart TD
   pfRes{"hit?"}
   denyPF["verdict: deny<br/>(code-file hit)"]
   askPF["verdict: ask<br/>(README-only hit)"]
-  llm["LLM source review<br/>UNTRUSTED-wrapped bundle"]
+  hooks{"install hooks<br/>in bundle?"}
+  allowNoHook["verdict: allow<br/>(OSV-clean, no install hooks;<br/>source review delegated to Snyk/OSV)"]
+  llm["LLM review of install hooks<br/>+ agent artifacts<br/>UNTRUSTED-wrapped bundle"]
   agg["policy.WorstVerdict<br/>allow &lt; ask &lt; deny"]
   out(["verdict: allow / ask / deny<br/>+ findings"])
 
@@ -281,7 +283,9 @@ flowchart TD
   osvHit -- no --> prefilter --> pfRes
   pfRes -- code --> denyPF --> agg
   pfRes -- doc-only --> askPF --> agg
-  pfRes -- clean --> llm --> agg
+  pfRes -- clean --> hooks
+  hooks -- no --> allowNoHook --> agg
+  hooks -- yes --> llm --> agg
   agg --> out
 ```
 

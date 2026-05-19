@@ -7,13 +7,12 @@ import (
 	"github.com/Maxlemore97/watchdog/internal/types"
 )
 
-var nugetInterestingExt = map[string]bool{
-	".nuspec": true,
-}
-var nugetInterestingNames = map[string]bool{
-	"readme.md": true, "readme.txt": true, "readme": true,
-	"license": true, "license.txt": true, "license.md": true,
-}
+// Modern NuGet (PackageReference) does not execute install.ps1 /
+// uninstall.ps1 at install time — those only ever ran under the
+// legacy packages.config flow. Bundle stays metadata-only; the
+// analyzer short-circuits when no install-hook files are present.
+var nugetInterestingExt = map[string]bool{}
+var nugetInterestingNames = map[string]bool{}
 
 // FetchNuGet pulls a .nupkg (zip) from api.nuget.org's v3
 // flatcontainer and curates the .nuspec manifest plus README files.

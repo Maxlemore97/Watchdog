@@ -42,10 +42,17 @@ func Fetch(ecosystem, name, version string) *types.ArtifactBundle {
 }
 
 // ---------- known interesting names per ecosystem ----------------
+//
+// Scope rule: bundles for published packages include install-hook
+// surfaces only (scripts that execute during `npm install`, `pip
+// install`, `cargo install`, etc.). Package source code is OSV +
+// Snyk/Socket territory — duplicating those scans with an LLM adds
+// hallucination risk without new signal. The agent-artifact paths
+// (FetchPluginGit, FetchPluginLocal) keep full coverage because
+// markdown skills/commands/hooks have no equivalent CVE database.
 
 var npmInterestingNames = map[string]bool{
-	"package.json": true, "readme": true, "readme.md": true,
-	"index.js": true, "index.mjs": true, "index.cjs": true,
+	"package.json": true,
 }
 var npmScriptKeys = map[string]bool{
 	"preinstall": true, "install": true, "postinstall": true,
@@ -54,24 +61,20 @@ var npmScriptKeys = map[string]bool{
 
 var pypiInterestingNames = map[string]bool{
 	"setup.py": true, "setup.cfg": true, "pyproject.toml": true,
-	"readme": true, "readme.md": true, "readme.rst": true, "__init__.py": true,
 }
 
 var cargoInterestingNames = map[string]bool{
-	"cargo.toml": true, "build.rs": true, "readme.md": true, "readme": true,
-	"lib.rs": true, "main.rs": true,
+	"cargo.toml": true, "build.rs": true,
 }
 var cargoScriptFiles = map[string]bool{"build.rs": true}
 
 var gemInterestingExtNames = map[string]bool{
 	"extconf.rb": true, "rakefile": true, "rakefile.rb": true,
 }
-var gemInterestingNames = map[string]bool{
-	"readme.md": true, "readme": true, "readme.rdoc": true,
-}
+var gemInterestingNames = map[string]bool{}
 
 var composerInterestingNames = map[string]bool{
-	"composer.json": true, "readme.md": true, "readme": true,
+	"composer.json": true,
 }
 var composerScriptKeys = map[string]bool{
 	"pre-install-cmd": true, "post-install-cmd": true,
@@ -277,9 +280,7 @@ func FetchCrates(name, version string) *types.ArtifactBundle {
 			extracted, order, err := readTarGzMembers(raw, false,
 				func(name string, parts []string) bool {
 					leaf := strings.ToLower(parts[len(parts)-1])
-					isSrc := len(parts) >= 2 && parts[len(parts)-2] == "src" &&
-						(leaf == "lib.rs" || leaf == "main.rs")
-					return cargoInterestingNames[leaf] || isSrc
+					return cargoInterestingNames[leaf]
 				},
 				func(name string, _ []string) string { return name })
 			if err != nil {
@@ -359,10 +360,9 @@ func FetchRubyGems(name, version string) *types.ArtifactBundle {
 				func(memberName string, parts []string) bool {
 					leaf := strings.ToLower(parts[len(parts)-1])
 					isExt := strings.Contains("/"+memberName, "/ext/") && gemInterestingExtNames[leaf]
-					isLibEntry := strings.HasSuffix(memberName, "lib/"+name+".rb")
 					isGemspec := strings.HasSuffix(leaf, ".gemspec")
 					return gemInterestingNames[leaf] || gemInterestingExtNames[leaf] ||
-						isExt || isLibEntry || isGemspec
+						isExt || isGemspec
 				},
 				func(memberName string, _ []string) string { return memberName })
 			if err != nil {
