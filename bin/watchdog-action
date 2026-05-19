@@ -1,0 +1,27 @@
+#!/usr/bin/env bash
+# Plugin shim: locate and exec the real watchdog-scan binary.
+#
+# Claude Code adds each plugin's bin/ to PATH for slash-command and
+# hook shells, but those shells do not source ~/.zshrc, so the real
+# binary installed under ~/.local/bin would otherwise be invisible.
+# This shim bridges the gap.
+set -e
+
+name="$(basename "$0")"
+self="$(cd "$(dirname "$0")" && pwd)/$name"
+
+for dir in \
+  "${WATCHDOG_INSTALL_DIR:-}" \
+  "$HOME/.local/bin" \
+  "/usr/local/bin" \
+  "/opt/homebrew/bin"; do
+  [ -z "$dir" ] && continue
+  real="$dir/$name"
+  [ "$real" = "$self" ] && continue
+  if [ -x "$real" ]; then
+    exec "$real" "$@"
+  fi
+done
+
+echo "$name: Watchdog binary not found. Run install.sh from https://github.com/Maxlemore97/Watchdog" >&2
+exit 127
