@@ -249,6 +249,19 @@ flowchart LR
 
 All four share `~/.cache/watchdog/`, so a plugin vetted by one adapter is recognized by the others.
 
+### One-shot project scan
+
+`watchdog-scan project [DIR]` walks a project tree without running an install, discovers pinned dependency lockfiles plus agent-extension roots, and pipes everything through the same OSV + analyzer engine. Useful for "I just cloned this repo — is it safe?" before you touch it.
+
+```bash
+watchdog-scan project .                  # scan cwd, JSON to stdout
+watchdog-scan project ~/code/foo --format=text
+watchdog-scan project . --plugins-only   # skip the dependency walk
+watchdog-scan project . --packages-only  # skip the plugin/skill walk
+```
+
+Lockfiles parsed: `package-lock.json`, `pnpm-lock.yaml`, `Pipfile.lock`, `poetry.lock`, `uv.lock`, `Cargo.lock`, `Gemfile.lock`, `composer.lock`, `go.mod`, `packages.lock.json`. Bare manifests without a lockfile are skipped (pinned versions only) and surfaced as a note. Plugin roots detected: any directory holding `.claude-plugin/`, `skills/`, `commands/`, `hooks/`, or a top-level `plugin.json`. Standalone `CLAUDE.md` / `agents.md` files are listed in the report. Exit code follows the worst verdict (0 for `allow`, 1 for `ask` / `deny`).
+
 ---
 
 ## How a verdict is decided
