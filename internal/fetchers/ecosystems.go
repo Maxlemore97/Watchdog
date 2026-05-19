@@ -138,14 +138,14 @@ func FetchNPM(name, version string) *types.ArtifactBundle {
 	}
 
 	metaOut := assembleNPMMetadata(meta, version)
-	return &types.ArtifactBundle{
+	return finalize(&types.ArtifactBundle{
 		Ecosystem: "npm",
 		Name:      name,
 		Version:   asString(metaOut["version"]),
 		Files:     fitBundle(files),
 		Metadata:  metaOut,
 		Notes:     notes,
-	}
+	})
 }
 
 // assembleNPMMetadata builds the curated metadata view from the raw
@@ -232,14 +232,14 @@ func FetchPyPI(name, version string) *types.ArtifactBundle {
 		"home_page":     info["home_page"],
 		"project_urls":  info["project_urls"],
 	}
-	return &types.ArtifactBundle{
+	return finalize(&types.ArtifactBundle{
 		Ecosystem: "PyPI",
 		Name:      name,
 		Version:   asString(metaOut["version"]),
 		Files:     fitBundle(files),
 		Metadata:  metaOut,
 		Notes:     notes,
-	}
+	})
 }
 
 // ---------- crates.io ---------------------------------------------
@@ -311,14 +311,14 @@ func FetchCrates(name, version string) *types.ArtifactBundle {
 		"created_at":         crateInfo["created_at"],
 		"has_build_script":   hasBuild,
 	}
-	return &types.ArtifactBundle{
+	return finalize(&types.ArtifactBundle{
 		Ecosystem: "crates.io",
 		Name:      name,
 		Version:   chosen,
 		Files:     fitBundle(files),
 		Metadata:  metaOut,
 		Notes:     notes,
-	}
+	})
 }
 
 // ---------- RubyGems ----------------------------------------------
@@ -337,13 +337,13 @@ func FetchRubyGems(name, version string) *types.ArtifactBundle {
 		// Surface the failure mode as a bundle with notes rather than
 		// nil; the analyzer renders "no resolvable version" in the
 		// verdict reason instead of a generic "could not fetch".
-		return &types.ArtifactBundle{
+		return finalize(&types.ArtifactBundle{
 			Ecosystem: "RubyGems",
 			Name:      name,
 			Files:     map[string]string{},
 			Metadata:  map[string]any{},
 			Notes:     []string{"no resolvable version for " + name},
-		}
+		})
 	}
 	files := newOrderedFiles()
 	notes := []string{}
@@ -391,14 +391,14 @@ func FetchRubyGems(name, version string) *types.ArtifactBundle {
 		"downloads":            meta["downloads"],
 		"has_native_extension": hasNative,
 	}
-	return &types.ArtifactBundle{
+	return finalize(&types.ArtifactBundle{
 		Ecosystem: "RubyGems",
 		Name:      name,
 		Version:   chosen,
 		Files:     fitBundle(files),
 		Metadata:  metaOut,
 		Notes:     notes,
-	}
+	})
 }
 
 // ---------- Packagist ---------------------------------------------
@@ -508,14 +508,14 @@ func FetchPackagist(name, version string) *types.ArtifactBundle {
 		"require":             chosen["require"],
 		"has_install_scripts": hasInstallScripts,
 	}
-	return &types.ArtifactBundle{
+	return finalize(&types.ArtifactBundle{
 		Ecosystem: "Packagist",
 		Name:      name,
 		Version:   chosenVersion,
 		Files:     fitBundle(files),
 		Metadata:  metaOut,
 		Notes:     notes,
-	}
+	})
 }
 
 // ---------- archive readers ---------------------------------------

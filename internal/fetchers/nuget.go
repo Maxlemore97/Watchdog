@@ -33,13 +33,13 @@ func FetchNuGet(name, version string) *types.ArtifactBundle {
 		}
 	}
 	if chosen == "" {
-		return &types.ArtifactBundle{
+		return finalize(&types.ArtifactBundle{
 			Ecosystem: "NuGet",
 			Name:      name,
 			Files:     map[string]string{},
 			Metadata:  map[string]any{},
 			Notes:     []string{"no resolvable version for " + name},
-		}
+		})
 	}
 
 	zipURL := fmt.Sprintf("https://api.nuget.org/v3-flatcontainer/%s/%s/%s.%s.nupkg",
@@ -72,12 +72,12 @@ func FetchNuGet(name, version string) *types.ArtifactBundle {
 		"id":      id,
 		"version": chosen,
 	}
-	return &types.ArtifactBundle{
+	return finalize(&types.ArtifactBundle{
 		Ecosystem: "NuGet",
 		Name:      name,
 		Version:   chosen,
 		Files:     fitBundle(files),
 		Metadata:  metaOut,
 		Notes:     notes,
-	}
+	})
 }

@@ -29,24 +29,24 @@ func FetchGoModule(name, version string) *types.ArtifactBundle {
 			}
 		}
 		if version == "latest" {
-			return &types.ArtifactBundle{
+			return finalize(&types.ArtifactBundle{
 				Ecosystem: "Go",
 				Name:      name,
 				Files:     map[string]string{},
 				Metadata:  map[string]any{},
 				Notes:     []string{"could not resolve @latest for " + name},
-			}
+			})
 		}
 	}
 
-	return &types.ArtifactBundle{
+	return finalize(&types.ArtifactBundle{
 		Ecosystem: "Go",
 		Name:      name,
 		Version:   version,
 		Files:     map[string]string{},
 		Metadata:  map[string]any{"module": name, "version": version},
 		Notes:     nil,
-	}
+	})
 }
 
 // goProxyEscape converts uppercase ASCII letters to `!<lower>` per

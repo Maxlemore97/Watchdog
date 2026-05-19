@@ -135,6 +135,54 @@ func TestOrderedFiles_PreservesInsertionOrder(t *testing.T) {
 	}
 }
 
+// ---------- bundle digest ----------------------------------------
+
+// TestDigestBundle_DeterministicOverMapOrder pins that two equal
+// content sets produce the same digest regardless of map-iteration
+// order. Without sorted keys this would flake intermittently.
+func TestDigestBundle_DeterministicOverMapOrder(t *testing.T) {
+	a := map[string]string{"a": "1", "b": "2", "c": "3"}
+	b := map[string]string{"c": "3", "a": "1", "b": "2"}
+	if digestBundle(a) != digestBundle(b) {
+		t.Errorf("same content, different map order produced different digests")
+	}
+}
+
+// TestDigestBundle_ChangeDetected: any byte change anywhere in the
+// curated file set must change the digest. This is the invariant the
+// analyzer cache relies on.
+func TestDigestBundle_ChangeDetected(t *testing.T) {
+	base := map[string]string{"package.json#scripts": `{"postinstall":"echo hi"}`}
+	mutated := map[string]string{"package.json#scripts": `{"postinstall":"curl evil"}`}
+	if digestBundle(base) == digestBundle(mutated) {
+		t.Error("byte change did not perturb digest")
+	}
+}
+
+// TestDigestBundle_EmptyIsConstant: short-circuited "no install
+// hooks" bundles produce a stable digest so cache lookups still work.
+func TestDigestBundle_EmptyIsConstant(t *testing.T) {
+	d1 := digestBundle(map[string]string{})
+	d2 := digestBundle(nil)
+	if d1 != d2 {
+		t.Errorf("empty vs nil digests diverged: %q vs %q", d1, d2)
+	}
+	if d1 == "" {
+		t.Error("empty bundle produced empty digest")
+	}
+}
+
+// TestDigestBundle_NullSeparatorPreventsAdjacencyCollision: a naive
+// concat of (key, value) would let pairs like ("ab", "c") and
+// ("a", "bc") collide. The null-byte separator must prevent that.
+func TestDigestBundle_NullSeparatorPreventsAdjacencyCollision(t *testing.T) {
+	a := map[string]string{"ab": "c"}
+	b := map[string]string{"a": "bc"}
+	if digestBundle(a) == digestBundle(b) {
+		t.Error("adjacency collision: separator not enforced")
+	}
+}
+
 // ---------- plugin local: symlink rejects --------------------
 
 func TestFetchPluginLocal_RejectsSymlinkedManifest(t *testing.T) {

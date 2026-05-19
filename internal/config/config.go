@@ -97,7 +97,10 @@ func Load() (Config, error) {
 	if c.CacheTTL, err = envSecs("WATCHDOG_CACHE_TTL", 3600*time.Second); err != nil {
 		return c, err
 	}
-	if c.LLMCacheTTL, err = envSecs("WATCHDOG_LLM_CACHE_TTL", 86400*time.Second); err != nil {
+	// 30 days: cache is content-addressed via bundle digest, so the
+	// TTL is a paranoia floor not a freshness driver. Override with
+	// WATCHDOG_LLM_CACHE_TTL.
+	if c.LLMCacheTTL, err = envSecs("WATCHDOG_LLM_CACHE_TTL", 2592000*time.Second); err != nil {
 		return c, err
 	}
 	if c.HookBudget, err = envSecs("WATCHDOG_HOOK_BUDGET_SECS", 30*time.Second); err != nil {

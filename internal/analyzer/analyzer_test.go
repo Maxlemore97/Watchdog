@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/Maxlemore97/watchdog/internal/types"
 )
@@ -327,6 +328,74 @@ func TestAnalyzeLocalPlugin_EmitsCompletedEvent(t *testing.T) {
 		if strings.Contains(line, omitted) {
 			t.Errorf("unfetchable route should omit %q, got %q", omitted, line)
 		}
+	}
+}
+
+// ---------- content-addressed cache --------------------------
+
+// TestCacheKey_DigestChangesKey pins the content-address invariant:
+// holding (ecosystem, name, version) constant, a different bundle
+// digest must produce a different cache key. Without this, two
+// versions of the same name@ver — say, a republished npm package
+// with mutated bytes — would collide on the cached "allow" verdict.
+func TestCacheKey_DigestChangesKey(t *testing.T) {
+	t.Setenv("WATCHDOG_CACHE_DIR", t.TempDir())
+	k1 := cacheKey("npm", "lodash", "4.17.21", "aaaa")
+	k2 := cacheKey("npm", "lodash", "4.17.21", "bbbb")
+	if k1 == k2 {
+		t.Errorf("different digests produced the same key: %q", k1)
+	}
+}
+
+// TestCacheKey_SameDigestSameKey is the matching invariant: identical
+// inputs must produce identical keys so cache lookups hit.
+func TestCacheKey_SameDigestSameKey(t *testing.T) {
+	t.Setenv("WATCHDOG_CACHE_DIR", t.TempDir())
+	k1 := cacheKey("npm", "lodash", "4.17.21", "aaaa")
+	k2 := cacheKey("npm", "lodash", "4.17.21", "aaaa")
+	if k1 != k2 {
+		t.Errorf("same inputs produced different keys: %q vs %q", k1, k2)
+	}
+}
+
+// TestCacheStore_SkipsAskVerdicts pins the "don't freeze a coin
+// flip" policy: an `ask` verdict reflects model non-determinism or
+// genuine indecision; persisting it locks in a possibly-wrong result
+// for the TTL window. allow/deny still persist.
+func TestCacheStore_SkipsAskVerdicts(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("WATCHDOG_CACHE_DIR", dir)
+
+	cacheStore("key-ask", map[string]any{"verdict": "ask", "reason": "x"})
+	if _, err := os.Stat(filepath.Join(dir, "key-ask.json")); err == nil {
+		t.Error("ask verdict was persisted; should have been skipped")
+	}
+
+	for _, v := range []string{"allow", "deny"} {
+		cacheStore("key-"+v, map[string]any{"verdict": v, "reason": "x"})
+		if _, err := os.Stat(filepath.Join(dir, "key-"+v+".json")); err != nil {
+			t.Errorf("%s verdict was not persisted: %v", v, err)
+		}
+	}
+}
+
+// TestCacheTTL_ContentAddressDoesNotOverrideTTL documents the
+// paranoia floor: even with content-addressed keys, an explicit
+// WATCHDOG_LLM_CACHE_TTL of 0 still expires entries on read. The TTL
+// stays in place as a worst-case bound.
+func TestCacheTTL_ContentAddressDoesNotOverrideTTL(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("WATCHDOG_CACHE_DIR", dir)
+	t.Setenv("WATCHDOG_LLM_CACHE_TTL", "0")
+
+	cacheStore("expire-me", map[string]any{"verdict": "allow", "reason": "x"})
+	// Force the file mtime into the past so the TTL=0 check fires.
+	past := time.Now().Add(-1 * time.Second)
+	if err := os.Chtimes(filepath.Join(dir, "expire-me.json"), past, past); err != nil {
+		t.Fatal(err)
+	}
+	if got := cacheLoad("expire-me"); got != nil {
+		t.Errorf("expected stale entry to be rejected; got %v", got)
 	}
 }
 

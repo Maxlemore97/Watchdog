@@ -100,14 +100,14 @@ func FetchPluginGit(gitURL, ref string) *types.ArtifactBundle {
 	cmd.Env = gitEnv()
 	if err := cmd.Run(); err != nil {
 		notes = append(notes, "git clone failed: "+err.Error())
-		return &types.ArtifactBundle{
+		return finalize(&types.ArtifactBundle{
 			Ecosystem: "plugin",
 			Name:      gitURL,
 			Version:   ref,
 			Files:     map[string]string{},
 			Metadata:  map[string]any{},
 			Notes:     notes,
-		}
+		})
 	}
 
 	for _, sub := range pluginInterestingDirs {
@@ -165,14 +165,14 @@ func FetchPluginGit(gitURL, ref string) *types.ArtifactBundle {
 		}
 	}
 
-	return &types.ArtifactBundle{
+	return finalize(&types.ArtifactBundle{
 		Ecosystem: "plugin",
 		Name:      gitURL,
 		Version:   ref,
 		Files:     fitBundle(files),
 		Metadata:  metadata,
 		Notes:     notes,
-	}
+	})
 }
 
 // FetchPluginLocal bundles a plugin already on disk (no clone, no
@@ -243,14 +243,14 @@ func FetchPluginLocal(name, dir string) *types.ArtifactBundle {
 	if v, ok := metadata["version"].(string); ok {
 		version = v
 	}
-	return &types.ArtifactBundle{
+	return finalize(&types.ArtifactBundle{
 		Ecosystem: "plugin",
 		Name:      name,
 		Version:   version,
 		Files:     fitBundle(files),
 		Metadata:  metadata,
 		Notes:     notes,
-	}
+	})
 }
 
 func readSmallFile(p string) (string, error) {

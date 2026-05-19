@@ -200,7 +200,7 @@ Optional, recommended. Watchdog shells out to whichever LLM CLI you have configu
 | Ollama   | `ollama`   | `llama3.1`                   | [ollama.com](https://ollama.com)                               |
 | Generic  | `WATCHDOG_LLM_CMD` | user-specified     | Any CLI that reads a prompt on stdin and writes JSON on stdout |
 
-Verdict cache keys include `(provider, model)`. Switching CLIs invalidates prior verdicts, so a weaker model can't whitewash something a stronger one cached.
+Verdict cache keys are content-addressed: `sha256(provider, model, sha256(system_prompt), ecosystem, name, version, bundle_digest)`. `bundle_digest` is a sha256 over the curated file set the LLM would see, computed by every fetcher. Unchanged bytes hit cache indefinitely; any change (republished `name@version`, fetcher-curation update, system-prompt edit, model upgrade) misses and re-runs. The 30-day `WATCHDOG_LLM_CACHE_TTL` default is a paranoia floor, not a freshness driver — OSV runs on its own 1h cycle and is where new-CVE detection happens. `ask` verdicts are not persisted: they often reflect model non-determinism, and the next call re-rolls.
 
 A verdict is only accepted if the model's entire trimmed output is one JSON object, or wraps that JSON in a ```` ```json ```` fence. Prose-embedded JSON is ignored; a hostile artifact echoed back can't smuggle a forged verdict object. If parsing fails, the fallback is `ask`.
 
@@ -461,7 +461,7 @@ Everything's an env var. Defaults are sensible; nothing's required.
 | `WATCHDOG_LLM_CMD`              | —                             | When provider=`generic`, the CLI to spawn                                                         |
 | `WATCHDOG_CACHE_DIR`            | `~/.cache/watchdog`           | Where verdicts and the ledger live                                                                |
 | `WATCHDOG_CACHE_TTL`            | `3600`                        | OSV cache TTL (seconds)                                                                           |
-| `WATCHDOG_LLM_CACHE_TTL`        | `86400`                       | LLM-verdict cache TTL (seconds)                                                                   |
+| `WATCHDOG_LLM_CACHE_TTL`        | `2592000` (30d)               | LLM-verdict cache TTL (paranoia floor — cache is content-addressed via bundle digest, so unchanged bytes hit cache regardless; lower this to force more frequent re-rolls) |
 | `WATCHDOG_HOOK_BUDGET_SECS`     | `30`                          | Wall-clock cap per hook invocation                                                                |
 | `WATCHDOG_SESSION_MAX_SCANS`    | `10`                          | Max plugins re-analyzed per SessionStart                                                          |
 | `WATCHDOG_ACTION_FAIL_ON`       | `deny`                        | `deny` / `ask` / `never` for the GitHub Action exit code                                          |

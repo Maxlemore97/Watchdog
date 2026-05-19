@@ -160,10 +160,17 @@ that has an edge on it.
   (PEM keys, AWS / GitHub / OpenAI-Anthropic / Slack token shapes,
   `curl … | sh`, `env | curl`). Bypass is possible with obfuscation;
   the LLM stage backstops.
-- **LLM verdicts are non-deterministic** and cached for 24 h by
-  default (`WATCHDOG_LLM_CACHE_TTL`). Switching provider or model
-  invalidates the cache (cache key includes
-  `(provider, model)`).
+- **LLM verdicts are non-deterministic.** Cache is content-addressed
+  via `bundle.UpstreamDigest` plus `(provider, model,
+  sha256(SystemPrompt), ecosystem, name, version)`. Unchanged bytes
+  hit cache regardless of wall clock; `WATCHDOG_LLM_CACHE_TTL`
+  (default 30 days) bounds worst-case staleness as a paranoia floor.
+  Switching provider, model, or editing the system prompt all
+  invalidate prior verdicts. `ask` verdicts are not persisted — the
+  next call re-rolls, which converges over time and avoids freezing a
+  coin-flip into the cache. Republished `name@version` (e.g. npm's
+  72-hour unpublish window) is caught by digest mismatch on the next
+  fetch.
 - **README / docs files** that document `curl … | sh` install
   patterns surface as `ask` rather than `deny` (`isDocPath` in
   `internal/analyzer/analyzer.go` classifies `README*`, `*.md`,
@@ -201,7 +208,16 @@ that has an edge on it.
    no CVE database covers prompt-injection or exfil-pattern text.
    A strict system prompt directs the model to treat `<UNTRUSTED>`
    content as data and return JSON; envelope shapes, fenced JSON,
-   and a verdict-keyed shallow object are accepted.
+   and a verdict-keyed shallow object are accepted. Verdicts are
+   cached under a content-addressed key:
+   `sha256(provider, model, sha256(SystemPrompt), ecosystem, name,
+   version, bundle.UpstreamDigest)`. Unchanged bundle bytes hit
+   cache regardless of wall clock; byte changes (republished
+   `name@version`, fetcher-curation update) miss and re-run.
+   `WATCHDOG_LLM_CACHE_TTL` (default 30 days) is a paranoia floor,
+   not a freshness driver. `ask` verdicts are deliberately not
+   persisted — they tend to reflect model non-determinism, and
+   freezing a coin-flip for 30 days is the wrong default.
 5. **Integrity verification** (`internal/integrity`, called on every
    hot path): sha256 manifest + Ed25519 signature; install-shaped
    Bash is denied on mismatch.

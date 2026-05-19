@@ -47,13 +47,18 @@ func escapeHTMLAttr(s string) string {
 	return htmlAttrEscaper.Replace(s)
 }
 
+// Default 30 days — the cache is content-addressed via
+// ArtifactBundle.UpstreamDigest, so unchanged bytes hit cache
+// indefinitely; the TTL is a paranoia floor that bounds worst-case
+// staleness if the digest somehow fails to capture a meaningful
+// difference. Override via WATCHDOG_LLM_CACHE_TTL.
 func cacheTTLSeconds() int {
 	if raw := os.Getenv("WATCHDOG_LLM_CACHE_TTL"); raw != "" {
 		if v, err := strconv.Atoi(raw); err == nil {
 			return v
 		}
 	}
-	return 86400
+	return 2592000
 }
 
 // ---------- prefilter ---------------------------------------------
@@ -181,9 +186,30 @@ func currentProviderSignature() string {
 	return prov.Name + ":" + cfg.Model
 }
 
-func cacheKey(ecosystem, name, version string) string {
-	raw := strings.ToLower(fmt.Sprintf("llm:%s:%s|%s|%s",
-		currentProviderSignature(), ecosystem, name, version))
+// systemPromptDigest returns the first 16 hex chars of
+// sha256(SystemPrompt). Folded into the cache key so a prompt edit
+// invalidates every prior verdict without needing a manual cache
+// clear — the model's behavior depends on the prompt, so cached
+// results from the prior prompt are stale.
+func systemPromptDigest() string {
+	sum := sha256.Sum256([]byte(SystemPrompt))
+	return hex.EncodeToString(sum[:])[:16]
+}
+
+// cacheKey produces the content-addressed verdict-cache key.
+// Namespace tag `llm-v2:` separates new entries from the legacy
+// time-keyed cache so the two can coexist until the old ones age out.
+//
+// Key inputs: provider+model (model upgrade → different verdicts),
+// systemPromptDigest (prompt edit invalidates), ecosystem/name/version
+// (identity), and bundleDigest (content). Two runs with the same
+// bundle digest hit the same cache entry regardless of wall clock;
+// byte differences (republished name@version, fetcher-curation
+// changes) miss and re-run the LLM.
+func cacheKey(ecosystem, name, version, bundleDigest string) string {
+	raw := strings.ToLower(fmt.Sprintf("llm-v2:%s:%s|%s|%s|%s|%s",
+		currentProviderSignature(), systemPromptDigest(),
+		ecosystem, name, version, bundleDigest))
 	sum := sha256.Sum256([]byte(raw))
 	return hex.EncodeToString(sum[:])[:32]
 }
@@ -209,6 +235,15 @@ func cacheLoad(key string) map[string]any {
 }
 
 func cacheStore(key string, verdict map[string]any) {
+	// Skip `ask` verdicts. They reflect non-determinism in the model
+	// or genuine analyzer indecision; persisting one freezes a coin
+	// flip for the full TTL window. The next call re-rolls, which is
+	// what we want for ambiguous cases. `allow` and `deny` cache
+	// normally, as do short-circuit verdicts (no_install_hooks,
+	// prefilter) which carry decisive reasons.
+	if v, _ := verdict["verdict"].(string); v == "ask" {
+		return
+	}
 	dir := paths.CacheDir()
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return
@@ -442,6 +477,13 @@ func verdictOf(m map[string]any) string {
 
 // AnalyzePackage runs OSV-cached LLM source review on one published
 // package. Returns a verdict map; on cache hit avoids LLM invocation.
+//
+// Fetch precedes cache lookup because the cache key is content-
+// addressed via bundle.UpstreamDigest. Fetch is cheap relative to an
+// LLM call (registry metadata + tarball download, sub-second to a
+// few seconds); paying it on every call buys us "unchanged bytes →
+// cached verdict regardless of TTL, changed bytes → guaranteed
+// re-run" — the right invariant for pinned name@version artifacts.
 func AnalyzePackage(ecosystem, name, version string) (result map[string]any) {
 	start := time.Now()
 	evt := completedEvent{ecosystem: ecosystem, name: name, version: version}
@@ -449,11 +491,6 @@ func AnalyzePackage(ecosystem, name, version string) (result map[string]any) {
 		emitAnalyzerCompleted(evt, verdictOf(result), time.Since(start))
 	}()
 
-	key := cacheKey(ecosystem, name, version)
-	if cached := cacheLoad(key); cached != nil {
-		evt.route = "cache"
-		return cached
-	}
 	bundle := fetchers.Fetch(ecosystem, name, version)
 	if bundle == nil {
 		evt.route = "unfetchable"
@@ -461,6 +498,11 @@ func AnalyzePackage(ecosystem, name, version string) (result map[string]any) {
 			"verdict": "ask",
 			"reason":  fmt.Sprintf("could not fetch %s:%s", ecosystem, name),
 		}
+	}
+	key := cacheKey(ecosystem, name, version, bundle.UpstreamDigest)
+	if cached := cacheLoad(key); cached != nil {
+		evt.route = "cache"
+		return cached
 	}
 	if v := Prefilter(bundle); v != nil {
 		cacheStore(key, v)
@@ -530,9 +572,15 @@ func AnalyzeLocalPlugin(name, dir, contentHash string) (result map[string]any) {
 			"reason":  "could not read plugin: " + name,
 		}
 	}
+	// Plugin-local already had a caller-supplied contentHash (from
+	// ledger.ContentHash) as its cache identity. Keep it in the
+	// version slot for callers that pass one, and additionally feed
+	// bundle.UpstreamDigest so the key reflects the exact bytes the
+	// LLM will see. Callers that pass an empty contentHash skip the
+	// cache entirely — preserves the prior opt-out semantics.
 	var key string
 	if contentHash != "" {
-		key = cacheKey("plugin-local", name, contentHash)
+		key = cacheKey("plugin-local", name, contentHash, bundle.UpstreamDigest)
 		if cached := cacheLoad(key); cached != nil {
 			evt.route = "cache"
 			return cached
