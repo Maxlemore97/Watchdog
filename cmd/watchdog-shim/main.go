@@ -269,9 +269,14 @@ func cmdStatus(args []string) int {
 		target = shim.DefaultShimDir()
 	}
 	fmt.Printf("Shim dir: %s\n", target)
-	st := shim.Status(shim.InstallOpts{ShimDir: dir})
-	// Print in ShimmedTools order for determinism.
-	for _, t := range shim.ShimmedTools {
+	tools, err := shim.EffectiveShimmedToolsFromEnv()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "watchdog-shim status: %v\n", err)
+		return 2
+	}
+	st := shim.Status(shim.InstallOpts{ShimDir: dir, Tools: tools})
+	// Print in effective-tools order for determinism.
+	for _, t := range tools {
 		marker := "-- "
 		if st[t] {
 			marker = "ok "

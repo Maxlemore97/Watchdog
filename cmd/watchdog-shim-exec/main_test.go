@@ -101,7 +101,7 @@ func TestShimExec_NonInstallCommandPassesThrough(t *testing.T) {
 }
 
 func TestShimExec_UnknownBinaryPassesThrough(t *testing.T) {
-	// `cat` is shimmed? No — not in ShimmedTools. So non-shimmed
+	// `cat` is shimmed? No — not in DefaultShimmedTools. So non-shimmed
 	// binaries must pass through even when invoked.
 	bin := buildBinary(t)
 	realDir := t.TempDir()

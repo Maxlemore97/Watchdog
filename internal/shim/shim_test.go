@@ -21,18 +21,83 @@ func TestIsShimmed(t *testing.T) {
 	}
 }
 
-func TestShimmedTools_HasAllExpected(t *testing.T) {
-	want := []string{"npm", "pnpm", "yarn", "bun", "pip", "pip3", "uv", "poetry", "cargo", "gem", "composer"}
+func TestDefaultShimmedTools_HasAllExpected(t *testing.T) {
+	want := []string{
+		"npm", "pnpm", "yarn", "bun",
+		"pip", "pip3", "pipx", "uv", "poetry",
+		"cargo", "gem", "composer",
+		"brew", "go", "dotnet",
+	}
 	for _, w := range want {
 		found := false
-		for _, t2 := range ShimmedTools {
+		for _, t2 := range DefaultShimmedTools {
 			if t2 == w {
 				found = true
 				break
 			}
 		}
 		if !found {
-			t.Errorf("ShimmedTools missing %q", w)
+			t.Errorf("DefaultShimmedTools missing %q", w)
+		}
+	}
+}
+
+func TestEffectiveShimmedTools_Defaults(t *testing.T) {
+	got, err := EffectiveShimmedTools(nil, nil)
+	if err != nil {
+		t.Fatalf("unexpected err: %v", err)
+	}
+	if len(got) != len(DefaultShimmedTools) {
+		t.Errorf("default len=%d, want %d", len(got), len(DefaultShimmedTools))
+	}
+}
+
+func TestEffectiveShimmedTools_SkipRemoves(t *testing.T) {
+	got, err := EffectiveShimmedTools(nil, []string{"go", "brew"})
+	if err != nil {
+		t.Fatalf("err: %v", err)
+	}
+	for _, name := range got {
+		if name == "go" || name == "brew" {
+			t.Errorf("%q should be skipped", name)
+		}
+	}
+}
+
+func TestEffectiveShimmedTools_AddIsIdempotent(t *testing.T) {
+	// Adding a tool already in the default set is a no-op.
+	got, err := EffectiveShimmedTools([]string{"npm"}, nil)
+	if err != nil {
+		t.Fatalf("err: %v", err)
+	}
+	count := 0
+	for _, name := range got {
+		if name == "npm" {
+			count++
+		}
+	}
+	if count != 1 {
+		t.Errorf("npm appears %d times, want 1", count)
+	}
+}
+
+func TestEffectiveShimmedTools_UnknownNameErrors(t *testing.T) {
+	if _, err := EffectiveShimmedTools([]string{"not-a-real-pm"}, nil); err == nil {
+		t.Errorf("expected error for unknown ADD entry")
+	}
+	if _, err := EffectiveShimmedTools(nil, []string{"also-unknown"}); err == nil {
+		t.Errorf("expected error for unknown SKIP entry")
+	}
+}
+
+func TestEffectiveShimmedTools_SkipBeatsAdd(t *testing.T) {
+	got, err := EffectiveShimmedTools([]string{"brew"}, []string{"brew"})
+	if err != nil {
+		t.Fatalf("err: %v", err)
+	}
+	for _, name := range got {
+		if name == "brew" {
+			t.Errorf("brew in both ADD and SKIP should be omitted, got %v", got)
 		}
 	}
 }

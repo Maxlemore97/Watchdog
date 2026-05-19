@@ -71,6 +71,34 @@ var ParityCases = []struct {
 
 	{"absolute-path-binary", "/usr/local/bin/npm install lodash",
 		[]types.Package{{Ecosystem: "npm", Name: "lodash"}}, 0},
+
+	{"brew-install", "brew install lodash",
+		[]types.Package{{Ecosystem: "Homebrew", Name: "lodash"}}, 0},
+	{"brew-install-cask-flag", "brew install --cask docker",
+		[]types.Package{{Ecosystem: "Homebrew", Name: "docker"}}, 0},
+	{"brew-non-install", "brew update", nil, 0},
+
+	{"pipx-install", "pipx install ruff",
+		[]types.Package{{Ecosystem: "PyPI", Name: "ruff"}}, 0},
+	{"pipx-install-pinned", "pipx install ruff==0.1.0",
+		[]types.Package{{Ecosystem: "PyPI", Name: "ruff", Version: "0.1.0"}}, 0},
+
+	{"go-install-pinned", "go install golang.org/x/tools/cmd/godoc@v0.20.0",
+		[]types.Package{{Ecosystem: "Go", Name: "golang.org/x/tools/cmd/godoc", Version: "v0.20.0"}}, 0},
+	{"go-install-latest", "go install github.com/owner/repo/cmd/foo@latest",
+		[]types.Package{{Ecosystem: "Go", Name: "github.com/owner/repo/cmd/foo", Version: "latest"}}, 0},
+	{"go-non-install", "go test ./...", nil, 0},
+
+	{"dotnet-add-package", "dotnet add package Newtonsoft.Json",
+		[]types.Package{{Ecosystem: "NuGet", Name: "Newtonsoft.Json"}}, 0},
+	{"dotnet-add-package-versioned", "dotnet add package Newtonsoft.Json --version 13.0.1",
+		[]types.Package{{Ecosystem: "NuGet", Name: "Newtonsoft.Json", Version: "13.0.1"}}, 0},
+	{"dotnet-add-package-inline-version", "dotnet add package Serilog --version=3.1.1",
+		[]types.Package{{Ecosystem: "NuGet", Name: "Serilog", Version: "3.1.1"}}, 0},
+	{"dotnet-add-with-project", "dotnet add MyProj.csproj package Newtonsoft.Json",
+		[]types.Package{{Ecosystem: "NuGet", Name: "Newtonsoft.Json"}}, 0},
+	{"dotnet-add-no-package-keyword", "dotnet add reference Foo.csproj", nil, 0},
+	{"dotnet-non-install", "dotnet build", nil, 0},
 }
 
 func TestParseInstall_Parity(t *testing.T) {

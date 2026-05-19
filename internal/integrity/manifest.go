@@ -64,6 +64,13 @@ type Manifest struct {
 	// Shims maps shim wrapper filename (e.g., "npm", "pip3", "npm.cmd")
 	// → hex sha256 of the wrapper file.
 	Shims map[string]string `json:"shims"`
+	// ShimmedTools is the effective tool-name set at install time
+	// (after WATCHDOG_SHIMMED_TOOLS_ADD / _SKIP). Captured so doctor
+	// and status report what's actually on disk rather than what the
+	// env vars resolve to now. Additive field — manifests written
+	// before this field shipped omit it, and Verify treats absence as
+	// "fall back to scanning the shim dir for marker-bearing files".
+	ShimmedTools []string `json:"shimmed_tools,omitempty"`
 	// Signature is a base64-encoded Ed25519 signature over the canonical
 	// JSON of every other field (with Signature itself cleared). Written
 	// by WriteManifest using the local signing key; verified by
@@ -124,13 +131,18 @@ func resolveBinary(name string) string {
 // The resulting manifest represents the trusted baseline for this
 // install. Pass it to WriteManifest to persist.
 func Build() (*Manifest, error) {
+	tools, err := shim.EffectiveShimmedToolsFromEnv()
+	if err != nil {
+		tools = shim.DefaultShimmedTools
+	}
 	m := &Manifest{
-		Version:     CurrentVersion,
-		InstalledAt: time.Now().UTC(),
-		WatchdogDir: paths.WatchdogDir(),
-		ShimDir:     shim.DefaultShimDir(),
-		Binaries:    map[string]string{},
-		Shims:       map[string]string{},
+		Version:      CurrentVersion,
+		InstalledAt:  time.Now().UTC(),
+		WatchdogDir:  paths.WatchdogDir(),
+		ShimDir:      shim.DefaultShimDir(),
+		Binaries:     map[string]string{},
+		Shims:        map[string]string{},
+		ShimmedTools: tools,
 	}
 	if v := os.Getenv("WATCHDOG_SHIM_DIR"); v != "" {
 		m.ShimDir = v

@@ -27,7 +27,11 @@ func (o InstallOpts) tools() []string {
 	if len(o.Tools) > 0 {
 		return o.Tools
 	}
-	return ShimmedTools
+	tools, err := EffectiveShimmedToolsFromEnv()
+	if err != nil {
+		return DefaultShimmedTools
+	}
+	return tools
 }
 
 func (o InstallOpts) execPath() string {
@@ -74,37 +78,42 @@ func Install(opts InstallOpts) ([]string, error) {
 	return written, nil
 }
 
-// Uninstall removes Watchdog-authored wrappers. Refuses to delete
-// files that lack the "Watchdog shim" marker so a user-authored
-// binary by the same name is never nuked.
+// Uninstall removes Watchdog-authored wrappers. Walks the shim dir
+// and deletes every file bearing the "Watchdog shim" marker — files
+// without the marker (user-authored binaries) are left alone. This
+// shape is orphan-safe: if a tool was previously shimmed but is no
+// longer in the effective set (e.g. operator added WATCHDOG_SHIMMED
+// _TOOLS_SKIP=go after install), its wrapper is still cleaned up.
 func Uninstall(opts InstallOpts) ([]string, error) {
 	dir := opts.dir()
 	if _, err := os.Stat(dir); err != nil {
 		return nil, nil
 	}
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return nil, err
+	}
 	var removed []string
-	for _, tool := range opts.tools() {
-		for _, p := range wrapperPaths(dir, tool) {
-			st, err := os.Stat(p)
-			if err != nil || st.IsDir() {
-				continue
-			}
-			head, err := os.ReadFile(p)
-			if err != nil {
-				continue
-			}
-			snippet := string(head)
-			if len(snippet) > 400 {
-				snippet = snippet[:400]
-			}
-			if !strings.Contains(snippet, "Watchdog shim") {
-				continue
-			}
-			if err := os.Remove(p); err != nil {
-				continue
-			}
-			removed = append(removed, p)
+	for _, ent := range entries {
+		if ent.IsDir() {
+			continue
 		}
+		p := filepath.Join(dir, ent.Name())
+		head, err := os.ReadFile(p)
+		if err != nil {
+			continue
+		}
+		snippet := string(head)
+		if len(snippet) > 400 {
+			snippet = snippet[:400]
+		}
+		if !strings.Contains(snippet, "Watchdog shim") {
+			continue
+		}
+		if err := os.Remove(p); err != nil {
+			continue
+		}
+		removed = append(removed, p)
 	}
 	return removed, nil
 }

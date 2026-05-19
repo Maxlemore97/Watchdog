@@ -120,7 +120,9 @@ For air-gapped or locked-down machines. Grab the archive for your platform from 
 
 ## Set up the package-manager shims
 
-The shims are PATH-prepend wrappers for `npm`, `pip`, `pip3`, `pnpm`, `yarn`, `bun`, `uv`, `poetry`, `cargo`, `gem`, and `composer`. Without them, Watchdog only fires inside Claude Code or an MCP-aware host.
+The shims are PATH-prepend wrappers for `npm`, `pnpm`, `yarn`, `bun`, `pip`, `pip3`, `pipx`, `uv`, `poetry`, `cargo`, `gem`, `composer`, `brew`, `go`, and `dotnet`. Without them, Watchdog only fires inside Claude Code or an MCP-aware host.
+
+Scope the set with `WATCHDOG_SHIMMED_TOOLS_ADD` and `WATCHDOG_SHIMMED_TOOLS_SKIP` (comma-separated, names validated against the parser's known set). `dotnet add package` is recognised as a 3-token verb; `go install` and `brew install` map to non-OSV ecosystems and run the LLM stage on registry metadata.
 
 ```bash
 watchdog-shim install
@@ -445,6 +447,8 @@ Everything's an env var. Defaults are sensible; nothing's required.
 | `WATCHDOG_DECISION_TTL`         | `60`                          | MCP→shim decision-token lifetime in seconds                                                       |
 | `WATCHDOG_MCP_HANDLER_TIMEOUT`  | `60`                          | Per-tool ceiling for MCP handlers (seconds)                                                       |
 | `WATCHDOG_DAEMON_LISTEN`        | —                             | Default --listen value for the watchdog-mcp daemon (e.g., `auto`, `tcp://127.0.0.1:7274`)         |
+| `WATCHDOG_SHIMMED_TOOLS_ADD`    | —                             | Comma-separated tool names to add to the default shim set (e.g., `WATCHDOG_SHIMMED_TOOLS_ADD=helm`) |
+| `WATCHDOG_SHIMMED_TOOLS_SKIP`   | —                             | Comma-separated tool names to drop from the default shim set (e.g., `WATCHDOG_SHIMMED_TOOLS_SKIP=go,brew`) |
 
 ---
 
@@ -545,7 +549,7 @@ internal/
   policy/     verdict ranking + worst-wins
   osv/        OSV.dev query, severity, version resolution
   parsers/    install command lexer + plugin prompt parser + tamper-pattern detector
-  fetchers/   per-ecosystem artifact fetch + tar safety
+  fetchers/   per-ecosystem artifact fetch + tar safety (npm, PyPI, crates.io, RubyGems, Packagist, Homebrew, Go, NuGet, plugin git)
   analyzer/   LLM prompt + prefilter + verdict extraction
   providers/  multi-LLM CLI registry
   ledger/     persistent plugin vetting ledger

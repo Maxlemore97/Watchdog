@@ -5,17 +5,86 @@
 package shim
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"runtime"
 	"strings"
+
+	"github.com/Maxlemore97/watchdog/internal/config"
+	"github.com/Maxlemore97/watchdog/internal/parsers"
 )
 
-// ShimmedTools lists the package-manager binaries Watchdog intercepts.
-var ShimmedTools = []string{
+// DefaultShimmedTools lists the package-manager binaries Watchdog
+// intercepts by default. Operators can shrink or grow this set with
+// WATCHDOG_SHIMMED_TOOLS_ADD / _SKIP — see EffectiveShimmedTools.
+var DefaultShimmedTools = []string{
 	"npm", "pnpm", "yarn", "bun",
-	"pip", "pip3", "uv", "poetry",
+	"pip", "pip3", "pipx", "uv", "poetry",
 	"cargo", "gem", "composer",
+	"brew", "go", "dotnet",
+}
+
+// EffectiveShimmedTools applies the WATCHDOG_SHIMMED_TOOLS_ADD /
+// WATCHDOG_SHIMMED_TOOLS_SKIP deltas to DefaultShimmedTools and
+// validates that every name maps to a known package manager
+// (parsers.EcosystemByCmd). Returns an error naming any unknown
+// entries so the install fails loudly rather than writing a wrapper
+// that nothing dispatches to.
+func EffectiveShimmedTools(add, skip []string) ([]string, error) {
+	skipSet := map[string]bool{}
+	for _, s := range skip {
+		skipSet[s] = true
+	}
+	addSet := map[string]bool{}
+	for _, a := range add {
+		addSet[a] = true
+	}
+	var unknown []string
+	for _, name := range add {
+		if _, ok := parsers.EcosystemByCmd[name]; !ok {
+			unknown = append(unknown, name)
+		}
+	}
+	for _, name := range skip {
+		if _, ok := parsers.EcosystemByCmd[name]; !ok {
+			unknown = append(unknown, name)
+		}
+	}
+	if len(unknown) > 0 {
+		return nil, fmt.Errorf("unknown tool name(s) in WATCHDOG_SHIMMED_TOOLS_ADD/_SKIP: %s (valid: see parsers.EcosystemByCmd)", strings.Join(unknown, ", "))
+	}
+	seen := map[string]bool{}
+	var out []string
+	for _, t := range DefaultShimmedTools {
+		if skipSet[t] {
+			continue
+		}
+		if seen[t] {
+			continue
+		}
+		seen[t] = true
+		out = append(out, t)
+	}
+	for _, t := range add {
+		if skipSet[t] || seen[t] {
+			continue
+		}
+		seen[t] = true
+		out = append(out, t)
+	}
+	_ = addSet
+	return out, nil
+}
+
+// EffectiveShimmedToolsFromEnv reads the two delta env vars and
+// resolves the effective set. Returns DefaultShimmedTools unchanged
+// when both env vars are unset.
+func EffectiveShimmedToolsFromEnv() ([]string, error) {
+	return EffectiveShimmedTools(
+		config.EnvList("WATCHDOG_SHIMMED_TOOLS_ADD"),
+		config.EnvList("WATCHDOG_SHIMMED_TOOLS_SKIP"),
+	)
 }
 
 // DefaultShimDir is where wrapper scripts land.
@@ -103,10 +172,16 @@ func isExecutable(p string) bool {
 	return st.Mode()&0o111 != 0
 }
 
-// IsShimmed reports whether the given tool name is in our intercept
-// list.
+// IsShimmed reports whether the given tool name is in the effective
+// intercept set. Reads env vars on every call so the shim-exec
+// dispatcher honours the operator's configured set without process
+// restart. On env error falls back to DefaultShimmedTools.
 func IsShimmed(name string) bool {
-	for _, t := range ShimmedTools {
+	tools, err := EffectiveShimmedToolsFromEnv()
+	if err != nil {
+		tools = DefaultShimmedTools
+	}
+	for _, t := range tools {
 		if t == name {
 			return true
 		}

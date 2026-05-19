@@ -39,6 +39,17 @@ func TestTamperPatterns_Detection(t *testing.T) {
 			[]string{TamperUnsetPath}},
 		{"sh -c subshell abspath", `sh -c "/usr/bin/pip install evil"`,
 			[]string{TamperAbsPathInstall}},
+		{"abs path brew", "/opt/homebrew/bin/brew install lodash",
+			[]string{TamperAbsPathInstall}},
+		{"abs path pipx", "/usr/local/bin/pipx install ruff",
+			[]string{TamperAbsPathInstall}},
+		{"abs path go install", "/usr/local/go/bin/go install golang.org/x/tools/cmd/godoc@v0.20.0",
+			[]string{TamperAbsPathInstall}},
+		{"abs path dotnet add package", "/usr/local/share/dotnet/dotnet add package Newtonsoft.Json",
+			[]string{TamperAbsPathInstall}},
+		{"abs path dotnet add with project", "/usr/local/share/dotnet/dotnet add MyProj.csproj package Newtonsoft.Json",
+			[]string{TamperAbsPathInstall}},
+		{"abs path dotnet build (non-install)", "/usr/local/share/dotnet/dotnet build", nil},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

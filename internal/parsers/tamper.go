@@ -138,6 +138,15 @@ func scanTokens(tokens []string, hits map[string]bool) {
 				if InstallSubcmds[base][sub] {
 					hits[TamperAbsPathInstall] = true
 				}
+				// Multi-word verbs: `dotnet add [<proj>] package`.
+				if base == "dotnet" && sub == "add" {
+					for j := cmdStart + 2; j < cmdStart+4 && j < len(tokens); j++ {
+						if tokens[j] == "package" {
+							hits[TamperAbsPathInstall] = true
+							break
+						}
+					}
+				}
 			}
 		}
 	}

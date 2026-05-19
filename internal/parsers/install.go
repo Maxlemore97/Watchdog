@@ -13,35 +13,45 @@ import (
 // EcosystemByCmd maps a package-manager binary name to its OSV
 // ecosystem name. Mirror of the Python ECOSYSTEM_BY_CMD map.
 var EcosystemByCmd = map[string]string{
-	"npm":     "npm",
-	"pnpm":    "npm",
-	"yarn":    "npm",
-	"bun":     "npm",
-	"pip":     "PyPI",
-	"pip3":    "PyPI",
-	"uv":      "PyPI",
-	"uv-pip":  "PyPI",
-	"poetry":  "PyPI",
-	"cargo":   "crates.io",
-	"gem":     "RubyGems",
+	"npm":      "npm",
+	"pnpm":     "npm",
+	"yarn":     "npm",
+	"bun":      "npm",
+	"pip":      "PyPI",
+	"pip3":     "PyPI",
+	"pipx":     "PyPI",
+	"uv":       "PyPI",
+	"uv-pip":   "PyPI",
+	"poetry":   "PyPI",
+	"cargo":    "crates.io",
+	"gem":      "RubyGems",
 	"composer": "Packagist",
+	"brew":     "Homebrew",
+	"go":       "Go",
+	"dotnet":   "NuGet",
 }
 
 // InstallSubcmds gates which subcommand counts as an install for each
-// binary. Anything else (e.g. `npm test`) is ignored.
+// binary. Anything else (e.g. `npm test`) is ignored. The `dotnet` key
+// uses the synthetic verb "package", emitted by the multi-word
+// dispatch when it sees `dotnet add [<project>] package`.
 var InstallSubcmds = map[string]map[string]bool{
-	"npm":     {"install": true, "i": true, "add": true},
-	"pnpm":    {"add": true, "install": true, "i": true},
-	"yarn":    {"add": true},
-	"bun":     {"add": true, "install": true, "i": true},
-	"pip":     {"install": true},
-	"pip3":    {"install": true},
-	"uv":      {"add": true},
-	"uv-pip":  {"install": true},
-	"poetry":  {"add": true},
-	"cargo":   {"add": true, "install": true},
-	"gem":     {"install": true},
+	"npm":      {"install": true, "i": true, "add": true},
+	"pnpm":     {"add": true, "install": true, "i": true},
+	"yarn":     {"add": true},
+	"bun":      {"add": true, "install": true, "i": true},
+	"pip":      {"install": true},
+	"pip3":     {"install": true},
+	"pipx":     {"install": true},
+	"uv":       {"add": true},
+	"uv-pip":   {"install": true},
+	"poetry":   {"add": true},
+	"cargo":    {"add": true, "install": true},
+	"gem":      {"install": true},
 	"composer": {"require": true},
+	"brew":     {"install": true},
+	"go":       {"install": true},
+	"dotnet":   {"package": true},
 }
 
 var shellBinaries = map[string]bool{
@@ -94,6 +104,20 @@ var flagsWithArg = map[string]map[string]bool{
 	"composer": {
 		"--working-dir": true, "-d": true, "--repository": true, "--repository-url": true,
 	},
+	"pipx": {
+		"--python": true, "--pip-args": true, "--index-url": true, "--spec": true,
+	},
+	"go": {
+		"-modfile": true, "-ldflags": true, "-tags": true, "-mod": true,
+		"-pkgdir": true, "-buildmode": true, "-gcflags": true, "-asmflags": true,
+	},
+	"dotnet": {
+		"--version": true, "--framework": true, "-f": true,
+		"--source": true, "-s": true, "--package-directory": true,
+	},
+	// brew has no flag-with-arg verbs we care about for `brew install`.
+	// --cask / --formula / --HEAD / -q etc. are all boolean and the
+	// default no-flag-arg branch already skips them.
 }
 
 func init() {
@@ -154,7 +178,7 @@ func SplitNameVersion(tok, binary string) (string, string) {
 			return tok, ""
 		}
 		return tok[:at], tok[at+1:]
-	case "pip", "pip3", "uv", "uv-pip", "poetry":
+	case "pip", "pip3", "pipx", "uv", "uv-pip", "poetry":
 		if m := pipVersionRE.FindStringSubmatch(tok); m != nil {
 			return m[1], m[2]
 		}
@@ -164,13 +188,13 @@ func SplitNameVersion(tok, binary string) (string, string) {
 			return "", ""
 		}
 		return parts[0], ""
-	case "cargo":
+	case "cargo", "go":
 		at := strings.Index(tok, "@")
 		if at == -1 {
 			return tok, ""
 		}
 		return tok[:at], tok[at+1:]
-	case "gem":
+	case "gem", "brew", "dotnet":
 		return tok, ""
 	case "composer":
 		colon := strings.Index(tok, ":")
@@ -198,14 +222,31 @@ func ParseInstall(command string) ([]types.Package, []string) {
 	binary := lastPathSegment(tokens[0])
 	var effectiveBinary, subcmd string
 	var args []string
-	if binary == "uv" && tokens[1] == "pip" {
+	switch {
+	case binary == "uv" && tokens[1] == "pip":
 		if len(tokens) < 4 {
 			return nil, nil
 		}
 		effectiveBinary = "uv-pip"
 		subcmd = tokens[2]
 		args = tokens[3:]
-	} else {
+	case binary == "dotnet" && tokens[1] == "add":
+		// `dotnet add package <Name>` or `dotnet add <project> package <Name>`.
+		// Find the literal "package" token in slots 2 or 3.
+		pkgIdx := -1
+		for j := 2; j < 4 && j < len(tokens); j++ {
+			if tokens[j] == "package" {
+				pkgIdx = j
+				break
+			}
+		}
+		if pkgIdx == -1 || pkgIdx+1 >= len(tokens) {
+			return nil, nil
+		}
+		effectiveBinary = "dotnet"
+		subcmd = "package"
+		args = tokens[pkgIdx+1:]
+	default:
 		effectiveBinary = binary
 		subcmd = tokens[1]
 		args = tokens[2:]
@@ -222,6 +263,7 @@ func ParseInstall(command string) ([]types.Package, []string) {
 	flagArgs := flagsWithArg[effectiveBinary]
 	var pkgs []types.Package
 	var notes []string
+	var dotnetVersion string
 	i := 0
 	for i < len(args) {
 		tok := args[i]
@@ -250,6 +292,10 @@ func ParseInstall(command string) ([]types.Package, []string) {
 					if consumed != "" {
 						notes = append(notes, "editable install: "+consumed)
 					}
+				case "--version":
+					if effectiveBinary == "dotnet" && consumed != "" {
+						dotnetVersion = consumed
+					}
 				}
 				if inlineVal != "" {
 					i++
@@ -273,6 +319,13 @@ func ParseInstall(command string) ([]types.Package, []string) {
 		}
 		pkgs = append(pkgs, types.Package{Ecosystem: ecosystem, Name: name, Version: version})
 		i++
+	}
+	if effectiveBinary == "dotnet" && dotnetVersion != "" {
+		for j := range pkgs {
+			if pkgs[j].Version == "" {
+				pkgs[j].Version = dotnetVersion
+			}
+		}
 	}
 	return pkgs, notes
 }

@@ -31,6 +31,12 @@ func Fetch(ecosystem, name, version string) *types.ArtifactBundle {
 		return FetchPackagist(name, version)
 	case "plugin":
 		return FetchPluginGit(name, version)
+	case "Homebrew":
+		return FetchHomebrew(name, version)
+	case "Go":
+		return FetchGoModule(name, version)
+	case "NuGet":
+		return FetchNuGet(name, version)
 	}
 	return nil
 }

@@ -123,6 +123,27 @@ func Load() (Config, error) {
 	return c, nil
 }
 
+// EnvList reads a comma-separated env var, trims each entry, drops
+// empties, and dedupes while preserving first-seen order. Returns nil
+// when the var is unset or empty.
+func EnvList(name string) []string {
+	raw := strings.TrimSpace(os.Getenv(name))
+	if raw == "" {
+		return nil
+	}
+	seen := map[string]bool{}
+	var out []string
+	for _, part := range strings.Split(raw, ",") {
+		p := strings.TrimSpace(part)
+		if p == "" || seen[p] {
+			continue
+		}
+		seen[p] = true
+		out = append(out, p)
+	}
+	return out
+}
+
 // Disabled reports whether WATCHDOG_DISABLE is set to a truthy value.
 // Hot path for hook entrypoints and the recursion guard inside
 // childEnv(); centralized here so every adapter agrees on what
