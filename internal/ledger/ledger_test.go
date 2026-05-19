@@ -72,6 +72,91 @@ func TestDiscover_SkipsSelf(t *testing.T) {
 	}
 }
 
+func TestDiscover_ReadsInstalledPluginsJSON(t *testing.T) {
+	tmp := t.TempDir()
+	cache := filepath.Join(tmp, "cache", "mkt", "alpha", "0.1")
+	if err := os.MkdirAll(cache, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	makePlugin(t, filepath.Dir(cache), "0.1", "0.1", false)
+	// rewrite the plugin manifest with the real name expected by the test
+	manifest := map[string]any{"name": "alpha", "version": "0.1"}
+	data, _ := json.Marshal(manifest)
+	if err := os.WriteFile(filepath.Join(cache, ".claude-plugin", "plugin.json"), data, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(cache, "hooks"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(cache, "hooks", "demo.sh"), []byte("#!/bin/sh\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	installed := map[string]any{
+		"version": 2,
+		"plugins": map[string]any{
+			"alpha@mkt": []any{
+				map[string]any{"scope": "user", "installPath": cache, "version": "0.1"},
+			},
+		},
+	}
+	doc, _ := json.Marshal(installed)
+	if err := os.WriteFile(filepath.Join(tmp, "installed_plugins.json"), doc, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Add a decoy child that would have matched the immediate-child walk
+	// — it must be ignored once installed_plugins.json is present.
+	makePlugin(t, tmp, "decoy", "0.1", false)
+
+	found := Discover([]string{tmp})
+	if len(found) != 1 || found[0].Name != "alpha" || found[0].Path != cache {
+		t.Errorf("expected alpha at %s, got %#v", cache, found)
+	}
+}
+
+func TestDiscover_InstalledPluginsJSON_SkipsStaleAndSelf(t *testing.T) {
+	tmp := t.TempDir()
+	live := filepath.Join(tmp, "cache", "mkt", "other", "0.1")
+	if err := os.MkdirAll(live, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	manifest := map[string]any{"name": "other", "version": "0.1"}
+	data, _ := json.Marshal(manifest)
+	if err := os.MkdirAll(filepath.Join(live, ".claude-plugin"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(live, ".claude-plugin", "plugin.json"), data, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	wd := filepath.Join(tmp, "cache", "mkt", "watchdog", "0.1")
+	if err := os.MkdirAll(filepath.Join(wd, ".claude-plugin"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	wdManifest, _ := json.Marshal(map[string]any{"name": "watchdog", "version": "0.1"})
+	if err := os.WriteFile(filepath.Join(wd, ".claude-plugin", "plugin.json"), wdManifest, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	installed := map[string]any{
+		"plugins": map[string]any{
+			"other@mkt":    []any{map[string]any{"installPath": live}},
+			"watchdog@mkt": []any{map[string]any{"installPath": wd}},
+			"stale@mkt":    []any{map[string]any{"installPath": filepath.Join(tmp, "cache", "mkt", "stale", "0.1")}},
+		},
+	}
+	doc, _ := json.Marshal(installed)
+	if err := os.WriteFile(filepath.Join(tmp, "installed_plugins.json"), doc, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	found := Discover([]string{tmp})
+	if len(found) != 1 || found[0].Name != "other" {
+		t.Errorf("expected only 'other'; got %#v", found)
+	}
+}
+
 // ---------- content hash ----------------------------------------
 
 func TestContentHash_StableForIdenticalFiles(t *testing.T) {

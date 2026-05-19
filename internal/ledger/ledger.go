@@ -269,6 +269,14 @@ type PluginInfo struct {
 
 // Discover returns plugins beneath the provided roots (or the default
 // dirs when roots is nil/empty).
+//
+// Two layouts are recognised. If a root contains `installed_plugins.json`
+// (the canonical Claude Code layout — plugins land at
+// `<root>/cache/<marketplace>/<plugin>/<version>/`, three levels deeper
+// than a flat plugin-dir), that file is parsed and each `installPath`
+// is treated as a plugin root. Otherwise Discover falls back to the
+// immediate-child walk, which fits flat layouts like temp dirs in tests
+// or `~/.config/claude/plugins/<plugin>/`.
 func Discover(roots []string) []PluginInfo {
 	if len(roots) == 0 {
 		roots = PluginDirs()
@@ -278,6 +286,17 @@ func Discover(roots []string) []PluginInfo {
 	for _, root := range roots {
 		st, err := os.Stat(root)
 		if err != nil || !st.IsDir() {
+			continue
+		}
+		if extra := discoverFromInstalledPlugins(root); extra != nil {
+			for _, p := range extra {
+				abs, err := filepath.Abs(p.Path)
+				if err != nil || seen[abs] {
+					continue
+				}
+				seen[abs] = true
+				out = append(out, p)
+			}
 			continue
 		}
 		entries, err := os.ReadDir(root)
@@ -308,6 +327,60 @@ func Discover(roots []string) []PluginInfo {
 			}
 			out = append(out, PluginInfo{Name: name, Path: child, Manifest: manifest})
 		}
+	}
+	return out
+}
+
+// discoverFromInstalledPlugins parses `<root>/installed_plugins.json`
+// and returns one PluginInfo per resolvable install. Returns nil if
+// the file is absent, malformed, or empty — callers fall back to the
+// immediate-child walk in that case. Stale install paths (manifest
+// missing on disk) and SelfName are filtered out so the host's view
+// of "installed" cannot mask a removed or self-referencing plugin.
+func discoverFromInstalledPlugins(root string) []PluginInfo {
+	data, err := os.ReadFile(filepath.Join(root, "installed_plugins.json"))
+	if err != nil {
+		return nil
+	}
+	var doc struct {
+		Plugins map[string][]struct {
+			InstallPath string `json:"installPath"`
+		} `json:"plugins"`
+	}
+	if err := json.Unmarshal(data, &doc); err != nil || len(doc.Plugins) == 0 {
+		return nil
+	}
+	ids := make([]string, 0, len(doc.Plugins))
+	for id := range doc.Plugins {
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+	out := make([]PluginInfo, 0, len(ids))
+	for _, id := range ids {
+		for _, inst := range doc.Plugins[id] {
+			if inst.InstallPath == "" {
+				continue
+			}
+			manifest := ReadManifest(inst.InstallPath)
+			if len(manifest) == 0 {
+				continue
+			}
+			name, _ := manifest["name"].(string)
+			if name == "" {
+				if i := strings.Index(id, "@"); i > 0 {
+					name = id[:i]
+				} else {
+					name = id
+				}
+			}
+			if name == SelfName {
+				continue
+			}
+			out = append(out, PluginInfo{Name: name, Path: inst.InstallPath, Manifest: manifest})
+		}
+	}
+	if len(out) == 0 {
+		return []PluginInfo{}
 	}
 	return out
 }

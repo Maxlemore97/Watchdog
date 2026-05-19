@@ -1,6 +1,6 @@
 {
   "name": "watchdog",
-  "version": "0.9.3",
+  "version": "0.9.4",
   "description": "Pre-install security analyzer: OSV CVE lookup + LLM source review for packages and Claude plugins. Single-binary Go port; install via watchdog-shim.",
   "author": {
     "name": "Maxlemore97",
