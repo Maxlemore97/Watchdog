@@ -120,15 +120,28 @@ For air-gapped or locked-down machines. Grab the archive for your platform from 
 
 ## Set up the package-manager shims
 
-The shims are PATH-prepend wrappers for `npm`, `pnpm`, `yarn`, `bun`, `pip`, `pip3`, `pipx`, `uv`, `poetry`, `cargo`, `gem`, `composer`, `brew`, `go`, and `dotnet`. Without them, Watchdog only fires inside Claude Code or an MCP-aware host.
+The shims are PATH-prepend wrappers. Without them, Watchdog only fires inside Claude Code or an MCP-aware host.
 
-Scope the set with `WATCHDOG_SHIMMED_TOOLS_ADD` and `WATCHDOG_SHIMMED_TOOLS_SKIP` (comma-separated, names validated against the parser's known set). `dotnet add package` is recognised as a 3-token verb; `go install` and `brew install` map to non-OSV ecosystems and run the LLM stage on registry metadata.
+| Shim | Install verb(s) | OSV ecosystem | Notes |
+|------|------------------|---------------|-------|
+| `npm`, `pnpm`, `yarn`, `bun` | `install` / `i` / `add` | `npm` | `yarn` only catches `add` |
+| `pip`, `pip3`, `pipx` | `install` | `PyPI` | wheel-only PyPI → metadata-only review |
+| `uv` | `add`; `uv pip install` two-word | `PyPI` | |
+| `poetry` | `add` | `PyPI` | |
+| `cargo` | `add`, `install` | `crates.io` | |
+| `gem` | `install` | `RubyGems` | |
+| `composer` | `require` | `Packagist` | |
+| `brew` | `install` | — (LLM-only) | formula/cask JSON from formulae.brew.sh |
+| `go` | `install <mod>@<ver>` | `Go` | proxy.golang.org zip |
+| `dotnet` | `add [<proj>] package` three-word | `NuGet` | api.nuget.org `.nupkg` |
+
+Scope the set with `WATCHDOG_SHIMMED_TOOLS_ADD` and `WATCHDOG_SHIMMED_TOOLS_SKIP` (comma-separated, names validated against the parser's known set at install time; unknown names fail loudly).
 
 ```bash
 watchdog-shim install
 ```
 
-Writes eleven wrapper scripts into `~/.watchdog/bin/` (or `%USERPROFILE%\.watchdog\bin` on Windows), records an integrity manifest at `~/.watchdog/manifest.json`, and prints the PATH line you need to add. The shim dir has to be **first** on your PATH; otherwise the shell finds the real binary directly and the check never runs.
+Writes one wrapper per tool in the effective set (fifteen by default) into `~/.watchdog/bin/` (or `%USERPROFILE%\.watchdog\bin` on Windows), records an integrity manifest at `~/.watchdog/manifest.json`, and prints the PATH line you need to add. The shim dir has to be **first** on your PATH; otherwise the shell finds the real binary directly and the check never runs.
 
 The manifest records sha256 hashes of every Watchdog binary and shim wrapper at install time. Hot paths (the PreToolUse hook, the shim, MCP `watchdog_health`) verify against it on every invocation — see [Tamper resistance](#tamper-resistance).
 
@@ -234,6 +247,8 @@ All four share `~/.cache/watchdog/`, so a plugin vetted by one adapter is recogn
 ## How a verdict is decided
 
 Every adapter funnels into the same pipeline. OSV runs first because it's quick and cached; an OSV deny short-circuits the rest. A clean OSV result still goes through a deterministic prefilter (PEM keys, AWS / GitHub / OpenAI / Slack token shapes, `curl … | sh`, env-piped-to-network). Only clean prefilter output reaches the LLM stage.
+
+The parser dispatches on the package-manager binary and its install verb. Most verbs are single tokens (`npm install`, `pip install`, `cargo add`); two multi-word forms are special-cased: `uv pip install` and `dotnet add [<project>] package`. Ecosystems with no OSV mapping (`brew`, plus the special `plugin` ecosystem used by Claude Code plugin installs) skip the OSV step and run straight into the LLM stage on registry metadata.
 
 ```mermaid
 flowchart TD
