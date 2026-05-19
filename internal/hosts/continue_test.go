@@ -85,6 +85,7 @@ func TestContinue_JSONFallbackWhenNoYAML(t *testing.T) {
 func TestPickContinueConfig_PrefersYAMLWhenPresent(t *testing.T) {
 	tmpHome := t.TempDir()
 	t.Setenv("HOME", tmpHome)
+	t.Setenv("USERPROFILE", tmpHome) // os.UserHomeDir() reads this on Windows
 	base := filepath.Join(tmpHome, ".continue")
 	if err := os.MkdirAll(base, 0o755); err != nil {
 		t.Fatal(err)
@@ -108,6 +109,7 @@ func TestPickContinueConfig_PrefersYAMLWhenPresent(t *testing.T) {
 func TestPickContinueConfig_DefaultsToJSONWhenNothingPresent(t *testing.T) {
 	tmpHome := t.TempDir()
 	t.Setenv("HOME", tmpHome)
+	t.Setenv("USERPROFILE", tmpHome) // os.UserHomeDir() reads this on Windows
 	path, format := pickContinueConfig()
 	if !strings.HasSuffix(path, "config.json") {
 		t.Errorf("path = %q, want config.json", path)
