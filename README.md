@@ -1,15 +1,19 @@
+<div align="center">
+
 # Watchdog
 
-Checks package installs before they actually run. When an AI agent decides to `npm install` something for you (or `pip`, `cargo`, `gem`, `bun`, etc.), Watchdog intercepts the command, asks OSV.dev about known CVEs, and optionally feeds the artifact to a local LLM for a source review. You get `allow`, `ask`, or `deny` back before anything lands on disk.
+Checks package installs before they actually run. When an AI agent decides to `npm install` something for you (or `pip`, `cargo`, `gem`, `bun`, etc.), Watchdog intercepts the command, asks OSV.dev about known CVEs, and optionally feeds the artifact to your configured LLM for a source review. You get `allow`, `ask`, or `deny` back before anything lands on disk.
 
-Static Go binary. No Python runtime. Linux, macOS, Windows.
+Static Go binary. Linux, macOS, Windows.
 
-It works with Claude Code, Cursor, Continue, Zed, OpenCode, Aider, Cline, and plain shells that an agent happens to be driving.
+Works with Claude Code, Claude Desktop, Cursor, Continue, Zed, OpenCode, Aider, Cline, and plain shells that an agent happens to be driving.
 
 [![Go 1.25+](https://img.shields.io/badge/go-1.25%2B-blue.svg)](https://go.dev/)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 [![Tests passing](https://img.shields.io/badge/tests-passing-brightgreen.svg)](#testing)
 [![Zero runtime deps](https://img.shields.io/badge/runtime%20deps-mcp--go%20only-lightgrey.svg)](#engine)
+
+</div>
 
 ---
 
@@ -164,7 +168,7 @@ watchdog-shim cache clear --type=all                       # nuke everything exc
 
 ## LLM providers
 
-Optional, recommended. Watchdog shells out to whichever local LLM CLI you have. Auto-detect order: `claude → gemini → openai → ollama`. Pin one with `WATCHDOG_LLM_PROVIDER`.
+Optional, recommended. Watchdog shells out to whichever LLM CLI you have configured (cloud or local). Auto-detect order: `claude → gemini → openai → ollama`. Pin one with `WATCHDOG_LLM_PROVIDER`.
 
 | Provider | CLI binary | Default model                | Install hint                                                   |
 |----------|------------|------------------------------|----------------------------------------------------------------|
@@ -460,14 +464,15 @@ The tamper / integrity audit log at `~/.watchdog/audit.jsonl` (separate from `WA
 
 - `manifest.written` / `manifest.removed` — install / uninstall.
 - `integrity.deny` — request denied because the integrity check failed or a tamper pattern was hit. Includes `tool`, `command`, and either `patterns` or `failures`.
-- `tamper.suspected` — emitted by the hook wrappers when the binary is missing but the manifest exists.
+- `integrity.failed` — integrity check produced a non-fatal failure surfaced to the agent via `additionalContext` (degraded state without an outright deny).
+- `tamper.suspected` — emitted by the hook wrappers (`hooks/pretool.sh`, `hooks/prompt.sh`) when the binary is missing but the manifest exists.
 - `mcp.tool.start` / `.ok` / `.error` / `.panic` / `.timeout` — one pair per MCP handler invocation.
 - `decision.written` (MCP) / `decision.consumed` (shim) / `.expired` / `.miss` / `.gc` — decision-token cache lifecycle.
+- `decision.unsigned` / `decision.corrupt` / `decision.write_failed` — token was rejected for missing signature (v1→v2 rollout), token bytes failed to parse, or the on-disk write didn't land.
 - `host.registered` / `host.unregistered` — `watchdog-shim register` / `unregister`.
 - `install.registered_via_prompt` / `install.register_skipped` — auto-prompt path during `watchdog-shim install`.
 - `daemon.start` / `daemon.stop` — watchdog-mcp daemon process lifecycle.
 - `daemon.installed` / `daemon.uninstalled` — `watchdog-shim daemon install` / `uninstall`.
-- `manifest.unsigned` / `decision.unsigned` — a v1 manifest or token was rejected for missing signature (transition signal during the v1→v2 rollout).
 
 Quick budget estimate, given `WATCHDOG_LOG=/tmp/watchdog.jsonl`:
 
