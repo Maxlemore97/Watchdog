@@ -7,7 +7,7 @@ allowed-tools: Bash
 Scan `$ARGUMENTS` and show the JSON verdict:
 
 ```!
-watchdog-scan "$ARGUMENTS"
+watchdog-scan $ARGUMENTS
 ```
 
 Two modes:
