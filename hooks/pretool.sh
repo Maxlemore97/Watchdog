@@ -34,6 +34,7 @@ esac
 # acceptable here — this fallback only fires when the main binary is
 # already missing and the manifest indicates tamper.
 if printf '%s' "$input" | grep -qE '(npm|pnpm|yarn|bun)[[:space:]]+(i|add|install)|pip[3]?[[:space:]]+install|cargo[[:space:]]+(add|install)|gem[[:space:]]+install|composer[[:space:]]+require|brew[[:space:]]+install|uv[[:space:]]+(add|pip[[:space:]]+install)|poetry[[:space:]]+add'; then
+  # shellcheck disable=SC2016  # backticks are literal markdown in JSON message
   printf '%s\n' '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":"watchdog: pretool binary missing but manifest present — tamper suspected. Run `watchdog-shim doctor` to investigate, or `watchdog-shim uninstall` to remove protection cleanly."}}'
 
   # Best-effort audit append. Fail silently if the dir is not writable.

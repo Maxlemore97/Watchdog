@@ -25,6 +25,7 @@ input=$(cat)
 # Match /plugin install … or /plugin marketplace add … in the prompt
 # text. Conservative regex.
 if printf '%s' "$input" | grep -qiE '/plugin[[:space:]]+(install|marketplace[[:space:]]+add)[[:space:]]+\S'; then
+  # shellcheck disable=SC2016  # backticks are literal markdown in JSON message
   printf '%s\n' '{"decision":"deny","reason":"watchdog: prompt binary missing but manifest present — tamper suspected. Run `watchdog-shim doctor` to investigate."}'
 
   audit_log="${WATCHDOG_AUDIT_LOG:-${WATCHDOG_DIR:-$HOME/.watchdog}/audit.jsonl}"
