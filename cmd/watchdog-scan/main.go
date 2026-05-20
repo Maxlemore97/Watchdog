@@ -128,6 +128,7 @@ func runProject(args []string) int {
 	format := fs.String("format", "json", "output format: json or text")
 	budget := fs.Float64("budget-secs", 120, "wall-clock cap for preflight (seconds)")
 	mode := fs.String("mode", "", "preflight mode override (osv/claude/both)")
+	maxPkgs := fs.Int("max-packages", 500, "package cap for this scan (the hook path keeps the lower default)")
 	// Pop the optional positional DIR before parsing flags so the
 	// usual `cmd DIR --flags` ordering works; Go's flag package
 	// otherwise stops at the first non-flag token.
@@ -149,6 +150,7 @@ func runProject(args []string) int {
 		PluginsOnly:    *pluginsOnly,
 		BudgetSeconds:  *budget,
 		Mode:           *mode,
+		MaxPackages:    *maxPkgs,
 	})
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "project scan failed: %v\n", err)

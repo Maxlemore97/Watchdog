@@ -10,7 +10,7 @@
       "name": "watchdog",
       "source": "./",
       "description": "Pre-install supply-chain scanner: OSV CVE lookup + LLM source review for packages and Claude plugins",
-      "version": "0.9.4",
+      "version": "0.9.5",
       "category": "security"
     }
   ]

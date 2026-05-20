@@ -47,6 +47,12 @@ type Options struct {
 	Mode              string  // osv / claude / both
 	FailClosedVerdict string  // verdict on OSV/analyzer error (default ask)
 	BudgetSeconds     float64 // wall-clock cap; <=0 means no cap
+	// MaxPackages overrides the per-call package cap. Hook-driven
+	// preflight (pretool, shim-exec) keeps the default 50 so a runaway
+	// `npm install` fails fast. Explicit `watchdog-scan project` runs
+	// pass a much larger cap since the user is already waiting.
+	// 0 = fall back to WATCHDOG_MAX_PACKAGES / DefaultMaxPackages.
+	MaxPackages int
 }
 
 // Result is what every adapter renders.
@@ -89,7 +95,7 @@ func Packages(pkgs []types.Package, notes []string, opts Options) Result {
 		return base
 	}
 
-	maxPkgs := maxPackages()
+	maxPkgs := maxPackages(opts.MaxPackages)
 	if len(pkgs) > maxPkgs {
 		base.Verdict = "ask"
 		base.Reason = fmt.Sprintf("too many packages for inline scan (%d > %d); raise WATCHDOG_MAX_PACKAGES or split the install", len(pkgs), maxPkgs)
@@ -320,7 +326,12 @@ func safeAnalyze(pkg types.Package) (out map[string]any) {
 	return analyzePackage(pkg.Ecosystem, pkg.Name, pkg.Version)
 }
 
-func maxPackages() int {
+// maxPackages picks the per-call package cap. Precedence:
+// explicit Options.MaxPackages > WATCHDOG_MAX_PACKAGES env > default.
+func maxPackages(override int) int {
+	if override > 0 {
+		return override
+	}
 	if raw := os.Getenv("WATCHDOG_MAX_PACKAGES"); raw != "" {
 		if v, err := strconv.Atoi(raw); err == nil && v > 0 {
 			return v

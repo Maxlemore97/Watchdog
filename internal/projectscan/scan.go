@@ -22,6 +22,11 @@ type ScanOpts struct {
 	PluginsOnly    bool
 	BudgetSeconds  float64
 	Mode           string // forwarded to preflight; default "both"
+	// MaxPackages overrides the preflight package cap for this scan.
+	// `watchdog-scan project` defaults this to a high value since the
+	// user is waiting on an explicit audit, unlike the install-time
+	// hook path that wants to fail fast on giant fan-outs.
+	MaxPackages int
 }
 
 // PackagesResult mirrors a preflight.Result for the dep walk.
@@ -127,6 +132,7 @@ func scanPackages(lockfiles []string, opts ScanOpts) PackagesResult {
 	pre := preflight.Packages(pkgs, nil, preflight.Options{
 		Mode:          mode,
 		BudgetSeconds: opts.BudgetSeconds,
+		MaxPackages:   opts.MaxPackages,
 	})
 	return PackagesResult{
 		Verdict:  pre.Verdict,

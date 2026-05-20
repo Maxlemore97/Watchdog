@@ -187,6 +187,29 @@ func TestPackages_AboveDefaultCapReturnsAsk(t *testing.T) {
 	}
 }
 
+func TestPackages_MaxPackagesOverrideRaisesCap(t *testing.T) {
+	var osvCalls int
+	restore := withStubs(t,
+		func(types.Package) ([]map[string]any, error) {
+			osvCalls++
+			return nil, nil
+		},
+		func(string, string, string) map[string]any { return nil },
+	)
+	defer restore()
+	pkgs := make([]types.Package, DefaultMaxPackages+5)
+	for i := range pkgs {
+		pkgs[i] = pkg(fmt.Sprintf("p%d", i), "1")
+	}
+	r := Packages(pkgs, nil, Options{Mode: "osv", MaxPackages: DefaultMaxPackages + 10})
+	if r.Verdict == "ask" && strings.Contains(r.Reason, "too many packages") {
+		t.Errorf("override should bypass the default cap; got %q / %q", r.Verdict, r.Reason)
+	}
+	if osvCalls != len(pkgs) {
+		t.Errorf("expected all %d pkgs scanned under override; got %d", len(pkgs), osvCalls)
+	}
+}
+
 func TestPackages_AtCapStillScans(t *testing.T) {
 	var scanned atomic.Bool
 	restore := withStubs(t,
