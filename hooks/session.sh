@@ -1,7 +1,12 @@
 #!/usr/bin/env bash
 # Watchdog SessionStart hook wrapper.
 set -eu
-if ! command -v watchdog-session >/dev/null 2>&1; then
-  exit 0
+
+# shellcheck source=lib/resolve.sh
+. "$(dirname "$0")/lib/resolve.sh"
+
+bin="$(resolve_watchdog_bin watchdog-session || true)"
+if [ -n "$bin" ]; then
+  exec "$bin"
 fi
-exec watchdog-session
+exit 0

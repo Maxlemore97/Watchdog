@@ -11,8 +11,12 @@
 # Clean-uninstall path: binary missing AND no manifest → exit 0.
 set -eu
 
-if command -v watchdog-prompt >/dev/null 2>&1; then
-  exec watchdog-prompt
+# shellcheck source=lib/resolve.sh
+. "$(dirname "$0")/lib/resolve.sh"
+
+bin="$(resolve_watchdog_bin watchdog-prompt || true)"
+if [ -n "$bin" ]; then
+  exec "$bin"
 fi
 
 manifest="${WATCHDOG_DIR:-$HOME/.watchdog}/manifest.json"
@@ -22,9 +26,17 @@ fi
 
 input=$(cat)
 
-# Match /plugin install … or /plugin marketplace add … in the prompt
-# text. Conservative regex.
-if printf '%s' "$input" | grep -qiE '/plugin[[:space:]]+(install|marketplace[[:space:]]+add)[[:space:]]+\S'; then
+# Extract just the prompt field so the /plugin-install regex below
+# only sees the user's actual prompt text, not the full hook envelope.
+# If python3 is missing we fall back to scanning the whole payload —
+# the prompt hook's regex is narrow enough (`/plugin install <arg>`)
+# that prose false positives are rare.
+prompt=$(extract_json_field "$input" "d.get('prompt','')" || true)
+if [ -z "$prompt" ]; then
+  prompt="$input"
+fi
+
+if printf '%s' "$prompt" | grep -qiE '/plugin[[:space:]]+(install|marketplace[[:space:]]+add)[[:space:]]+\S'; then
   # shellcheck disable=SC2016  # backticks are literal markdown in JSON message
   printf '%s\n' '{"decision":"deny","reason":"watchdog: prompt binary missing but manifest present — tamper suspected. Run `watchdog-shim doctor` to investigate."}'
 

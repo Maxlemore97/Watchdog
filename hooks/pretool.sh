@@ -13,8 +13,12 @@
 # (other plugins' hook decisions remain in effect).
 set -eu
 
-if command -v watchdog-pretool >/dev/null 2>&1; then
-  exec watchdog-pretool
+# shellcheck source=lib/resolve.sh
+. "$(dirname "$0")/lib/resolve.sh"
+
+bin="$(resolve_watchdog_bin watchdog-pretool || true)"
+if [ -n "$bin" ]; then
+  exec "$bin"
 fi
 
 manifest="${WATCHDOG_DIR:-$HOME/.watchdog}/manifest.json"
@@ -25,19 +29,30 @@ fi
 input=$(cat)
 
 # Only inspect Bash tool calls. Other tools pass through silently.
-case "$input" in
-  *'"tool_name"'*'"Bash"'*) ;;
-  *) exit 0 ;;
-esac
+tool=$(extract_json_field "$input" "d.get('tool_name','')" || true)
+if [ "$tool" != "Bash" ]; then
+  exit 0
+fi
 
-# Conservative install-verb match. False positives (over-blocking) are
-# acceptable here — this fallback only fires when the main binary is
-# already missing and the manifest indicates tamper.
-if printf '%s' "$input" | grep -qE '(npm|pnpm|yarn|bun)[[:space:]]+(i|add|install)|pip[3]?[[:space:]]+install|cargo[[:space:]]+(add|install)|gem[[:space:]]+install|composer[[:space:]]+require|brew[[:space:]]+install|uv[[:space:]]+(add|pip[[:space:]]+install)|poetry[[:space:]]+add'; then
+# Pull just the command field so the install-verb regex doesn't false-
+# positive on commit messages, PR bodies, or any other prose that
+# happens to quote an install verb. If python3 is unavailable the
+# extraction returns empty — in that case we exit 0 rather than fall
+# back to denying every Bash call, because over-blocking the user's
+# normal workflow is worse than the (already-unlikely) tamper case
+# the fallback was meant to catch.
+cmd=$(extract_json_field "$input" "d.get('tool_input',{}).get('command','')" || true)
+if [ -z "$cmd" ]; then
+  exit 0
+fi
+
+# Install-verb match at the start of a sub-command. Sub-commands begin
+# at the start of the string or after a separator (; && || | ( newline).
+# Anchoring at a separator avoids matching `git commit -m "npm install"`.
+if printf '%s' "$cmd" | grep -qE '(^|[;&|()][[:space:]]*|[[:space:]]&&[[:space:]]*|[[:space:]]\|\|[[:space:]]*)(npm|pnpm|yarn|bun)[[:space:]]+(i|add|install)([[:space:]]|$)|(^|[;&|()][[:space:]]*)pip[3]?[[:space:]]+install([[:space:]]|$)|(^|[;&|()][[:space:]]*)cargo[[:space:]]+(add|install)([[:space:]]|$)|(^|[;&|()][[:space:]]*)gem[[:space:]]+install([[:space:]]|$)|(^|[;&|()][[:space:]]*)composer[[:space:]]+require([[:space:]]|$)|(^|[;&|()][[:space:]]*)brew[[:space:]]+install([[:space:]]|$)|(^|[;&|()][[:space:]]*)uv[[:space:]]+(add|pip[[:space:]]+install)([[:space:]]|$)|(^|[;&|()][[:space:]]*)poetry[[:space:]]+add([[:space:]]|$)'; then
   # shellcheck disable=SC2016  # backticks are literal markdown in JSON message
   printf '%s\n' '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":"watchdog: pretool binary missing but manifest present — tamper suspected. Run `watchdog-shim doctor` to investigate, or `watchdog-shim uninstall` to remove protection cleanly."}}'
 
-  # Best-effort audit append. Fail silently if the dir is not writable.
   audit_log="${WATCHDOG_AUDIT_LOG:-${WATCHDOG_DIR:-$HOME/.watchdog}/audit.jsonl}"
   audit_dir=$(dirname -- "$audit_log")
   if mkdir -p "$audit_dir" 2>/dev/null; then
