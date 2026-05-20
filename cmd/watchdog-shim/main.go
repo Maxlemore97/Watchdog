@@ -26,10 +26,10 @@ import (
 )
 
 func usage() {
-	fmt.Fprintln(os.Stderr, `watchdog-shim install     [--dir DIR] [--no-overwrite] [--register | --no-register | -y]
+	fmt.Fprintln(os.Stderr, `watchdog-shim install     [--dir DIR] [--no-overwrite] [--register | --no-register | -y] [--add-to-path]
 watchdog-shim uninstall   [--dir DIR]
 watchdog-shim status      [--dir DIR]
-watchdog-shim doctor      [--llm-smoke] [--llm-smoke-timeout=DUR]
+watchdog-shim doctor      [--llm-smoke] [--llm-smoke-timeout=DUR] [--fix]
 watchdog-shim register    [--host=NAME] [--all]
 watchdog-shim unregister  [--host=NAME] [--all]
 watchdog-shim daemon      install [--listen=ADDR] | uninstall | status
@@ -75,6 +75,7 @@ type installFlags struct {
 	overwrite  bool
 	register   bool // explicit --register / -y
 	noRegister bool // explicit --no-register
+	addToPath  bool // --add-to-path: write managed block to shell rc
 }
 
 func parseInstallFlags(args []string) installFlags {
@@ -84,12 +85,14 @@ func parseInstallFlags(args []string) installFlags {
 	register := fs.Bool("register", false, "auto-register with every detected MCP host (no prompt)")
 	noRegister := fs.Bool("no-register", false, "skip the post-install host-registration prompt")
 	yes := fs.Bool("y", false, "alias for --register")
+	addToPath := fs.Bool("add-to-path", false, "append a managed PATH-prepend block to your shell rc")
 	_ = fs.Parse(args)
 	return installFlags{
 		dir:        *dirFlag,
 		overwrite:  !*noOverwrite,
 		register:   *register || *yes,
 		noRegister: *noRegister,
+		addToPath:  *addToPath,
 	}
 }
 
@@ -152,16 +155,48 @@ func cmdInstall(args []string) int {
 
 	maybeRegisterHosts(f)
 
-	fmt.Println()
-	fmt.Println("Add this directory to the FRONT of your PATH:")
-	if runtime.GOOS == "windows" {
-		fmt.Printf("  $env:Path = \"%s;\" + $env:Path        (PowerShell)\n", target)
-		fmt.Printf("  setx PATH \"%s;%%PATH%%\"             (cmd.exe, persistent)\n", target)
+	if f.addToPath {
+		applyPathSetup(target)
 	} else {
-		fmt.Printf("  export PATH=\"%s:$PATH\"\n", target)
-		fmt.Println("Then restart your shell or `source` your rc file.")
+		fmt.Println()
+		fmt.Println("Add this directory to the FRONT of your PATH:")
+		if runtime.GOOS == "windows" {
+			fmt.Printf("  $env:Path = \"%s;\" + $env:Path        (PowerShell)\n", target)
+			fmt.Printf("  setx PATH \"%s;%%PATH%%\"             (cmd.exe, persistent)\n", target)
+		} else {
+			fmt.Printf("  export PATH=\"%s:$PATH\"\n", target)
+			fmt.Println("Then restart your shell or `source` your rc file.")
+			fmt.Println("Or re-run with `--add-to-path` to let watchdog-shim manage this for you.")
+		}
 	}
 	return 0
+}
+
+// applyPathSetup runs the rc-edit flow and prints the outcome.
+// Failures are warnings, not errors, so a sandboxed environment
+// without a writable rc file does not break the install verb.
+func applyPathSetup(shimDir string) {
+	rc, ok := shim.DetectShellRC()
+	if !ok {
+		fmt.Fprintln(os.Stderr, "warning: --add-to-path could not detect a shell rc file; add the shim dir to PATH manually.")
+		return
+	}
+	added, err := shim.EnsurePathExport(rc, shimDir)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "warning: --add-to-path failed: %v\n", err)
+		return
+	}
+	if added {
+		fmt.Printf("  PATH updated in %s\n", rc.Path)
+		fmt.Printf("  Restart your shell or run `source %s` to pick up the change.\n", rc.Path)
+		audit.Record("install.path_setup_applied", map[string]any{
+			"rc":       rc.Path,
+			"shell":    rc.Shell,
+			"shim_dir": shimDir,
+		})
+	} else {
+		fmt.Printf("  PATH already configured in %s\n", rc.Path)
+	}
 }
 
 // maybeRegisterHosts runs the post-install host-registration flow.
@@ -265,6 +300,17 @@ func cmdUninstall(args []string) int {
 			"path": paths.ManifestPath(),
 		})
 	}
+	// Strip any managed PATH block we previously wrote. Same rationale
+	// as the manifest removal: don't leave half-uninstalled state that
+	// confuses a future re-install.
+	if rc, ok := shim.DetectShellRC(); ok {
+		if stripped, err := shim.RemovePathExport(rc); err == nil && stripped {
+			fmt.Printf("Removed PATH block from %s\n", rc.Path)
+			audit.Record("uninstall.path_setup_removed", map[string]any{
+				"rc": rc.Path,
+			})
+		}
+	}
 	return 0
 }
 
@@ -301,6 +347,7 @@ func cmdDoctor(args []string) int {
 		"send a tiny prompt to the detected LLM CLI (costs a few tokens)")
 	smokeTimeout := fs.Duration("llm-smoke-timeout", 5*time.Second,
 		"how long to wait for the smoke response")
+	fix := fs.Bool("fix", false, "auto-apply safe remediations (currently: --add-to-path equivalent)")
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
@@ -314,12 +361,33 @@ func cmdDoctor(args []string) int {
 	// 1. shim dir on PATH and first
 	pathEnv := os.Getenv("PATH")
 	parts := strings.Split(pathEnv, string(os.PathListSeparator))
-	if len(parts) > 0 && samePath(parts[0], target) {
+	pathOK := len(parts) > 0 && samePath(parts[0], target)
+	pathOnPath := containsPath(parts, target)
+	switch {
+	case pathOK:
 		fmt.Println("  ok  shim dir is first on PATH")
-	} else if containsPath(parts, target) {
+	case pathOnPath:
 		fmt.Println("  warn shim dir is on PATH but not first — installs invoke the real binary directly")
-	} else {
+	default:
 		fmt.Printf("  fail shim dir %s is not on PATH\n", target)
+	}
+	if *fix && !pathOK {
+		if rc, ok := shim.DetectShellRC(); ok {
+			if added, err := shim.EnsurePathExport(rc, target); err != nil {
+				fmt.Fprintf(os.Stderr, "  fail --fix could not update %s: %v\n", rc.Path, err)
+			} else if added {
+				fmt.Printf("  fix  PATH block written to %s — restart your shell or `source` it.\n", rc.Path)
+				audit.Record("doctor.path_setup_applied", map[string]any{
+					"rc":       rc.Path,
+					"shell":    rc.Shell,
+					"shim_dir": target,
+				})
+			} else {
+				fmt.Printf("  --  PATH block already present in %s — new shell needed?\n", rc.Path)
+			}
+		} else {
+			fmt.Fprintln(os.Stderr, "  fail --fix could not detect a shell rc file")
+		}
 	}
 
 	// 2. watchdog-shim-exec discoverable
@@ -378,7 +446,18 @@ func cmdDoctor(args []string) int {
 		}
 	}
 
-	// 6. MCP host registration — show detected hosts and whether
+	// 6. diagnostic log destination — surface the WATCHDOG_LOG knob.
+	// Default is silent, which is fine for normal operation but
+	// surprising when a user is debugging a verdict. Reporting the
+	// current state from doctor turns "where do I look?" into one
+	// glance.
+	if logPath := os.Getenv("WATCHDOG_LOG"); logPath != "" {
+		fmt.Printf("  ok  diagnostic log enabled: %s\n", logPath)
+	} else {
+		fmt.Println("  --  diagnostic log disabled (set WATCHDOG_LOG=/path/to/file to enable; one JSON event per line)")
+	}
+
+	// 7. MCP host registration — show detected hosts and whether
 	// watchdog-mcp is wired into each. Read-only; modifications go
 	// through `watchdog-shim register/unregister`.
 	detected := hosts.Detect()

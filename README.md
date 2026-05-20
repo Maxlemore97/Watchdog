@@ -92,7 +92,7 @@ Pick whichever applies.
 curl -fsSL https://raw.githubusercontent.com/Maxlemore97/Watchdog/main/install.sh | sh
 ```
 
-Pulls the latest release for your OS+arch, verifies SHA-256 against the published `checksums.txt`, and drops eight binaries into `~/.local/bin`. Override the destination with `WATCHDOG_INSTALL_DIR`. Pin a version with `WATCHDOG_VERSION=v0.9.6 sh install.sh`.
+Pulls the latest release for your OS+arch, verifies SHA-256 against the published `checksums.txt`, and drops eight binaries into `~/.local/bin`. Override the destination with `WATCHDOG_INSTALL_DIR`. Pin a version with `WATCHDOG_VERSION=v0.9.7 sh install.sh`.
 
 ### B. Install script (Windows PowerShell)
 
@@ -152,7 +152,15 @@ Writes one wrapper per tool in the effective set (fifteen by default) into `~/.w
 
 The manifest records sha256 hashes of every Watchdog binary and shim wrapper at install time. Hot paths (the PreToolUse hook, the shim, MCP `watchdog_health`) verify against it on every invocation — see [Tamper resistance](#tamper-resistance).
 
-Linux / macOS, bash or zsh:
+Easiest — let `watchdog-shim install` manage the rc edit:
+
+```bash
+watchdog-shim install --add-to-path
+```
+
+`--add-to-path` detects your shell (zsh / bash / fish, override with `WATCHDOG_RC=/path/to/rc`), writes an idempotent managed block to the rc file, and prints the `source` command needed to pick it up. `watchdog-shim uninstall` removes the same block. Already-installed setups can fix a stale PATH later with `watchdog-shim doctor --fix`.
+
+Manual equivalent — Linux / macOS, bash or zsh:
 
 ```bash
 echo 'export PATH="$HOME/.watchdog/bin:$PATH"' >> ~/.bashrc   # or ~/.zshrc
@@ -461,7 +469,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with: { fetch-depth: 0 }
-      - uses: Maxlemore97/Watchdog@v0.9.6
+      - uses: Maxlemore97/Watchdog@v0.9.7
         with:
           fail-on: deny     # deny | ask | never
 ```
@@ -561,6 +569,16 @@ Hook says `scan budget exceeded`. Raise `WATCHDOG_HOOK_BUDGET_SECS` (default 30)
 
 Bypass once: `WATCHDOG_DISABLE=1 npm install something`. Short-circuits to a straight pass-through.
 
+"I don't know what Watchdog just did". The engine emits structured JSON events but logging is **opt-in** — no file is written unless `WATCHDOG_LOG` points somewhere writable. Enable it before reproducing:
+
+```bash
+export WATCHDOG_LOG=$HOME/.cache/watchdog/log.jsonl
+# now run the command you want to investigate
+tail -f $WATCHDOG_LOG | jq .
+```
+
+Every analyzer call, preflight verdict, prefilter hit, OSV failure, and cache write lands as one JSON line — field list is in the [Events](#events) section above. `watchdog-shim doctor` reports whether logging is currently enabled.
+
 ---
 
 ## Threat model
@@ -635,7 +653,7 @@ go test -race ./...
 Releases stamp the version via ldflags so each binary reports it through `--version`:
 
 ```bash
-go build -ldflags '-X github.com/Maxlemore97/watchdog/internal/version.Version=v0.9.6' ./...
+go build -ldflags '-X github.com/Maxlemore97/watchdog/internal/version.Version=v0.9.7' ./...
 ```
 
 Unstamped builds report `dev`. Release builds may additionally stamp `internal/integrity.BaselinePubKey` with a base64 Ed25519 verifier public key — when set, every binary checks `~/.watchdog/baseline.json` against its release signature and reports drift via `BASELINE_BINARY_DRIFT`. Unstamped builds skip baseline verification silently.
