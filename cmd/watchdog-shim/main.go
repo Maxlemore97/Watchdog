@@ -21,6 +21,7 @@ import (
 	"github.com/Maxlemore97/watchdog/internal/integrity"
 	"github.com/Maxlemore97/watchdog/internal/paths"
 	"github.com/Maxlemore97/watchdog/internal/providers"
+	"github.com/Maxlemore97/watchdog/internal/selfupdate"
 	"github.com/Maxlemore97/watchdog/internal/shim"
 	"github.com/Maxlemore97/watchdog/internal/version"
 )
@@ -30,6 +31,7 @@ func usage() {
 watchdog-shim uninstall   [--dir DIR]
 watchdog-shim status      [--dir DIR]
 watchdog-shim doctor      [--llm-smoke] [--llm-smoke-timeout=DUR] [--fix]
+watchdog-shim update      [--check] [--force] [--version vX.Y.Z] [--install-dir DIR]
 watchdog-shim register    [--host=NAME] [--all]
 watchdog-shim unregister  [--host=NAME] [--all]
 watchdog-shim daemon      install [--listen=ADDR] | uninstall | status
@@ -64,6 +66,8 @@ func main() {
 		os.Exit(cmdDaemon(rest))
 	case "cache":
 		os.Exit(cmdCache(rest))
+	case "update":
+		os.Exit(cmdUpdate(rest))
 	default:
 		usage()
 		os.Exit(2)
@@ -741,4 +745,103 @@ func containsPath(parts []string, target string) bool {
 		}
 	}
 	return false
+}
+
+// cmdUpdate downloads the latest (or pinned) release, verifies the
+// sha256 against checksums.txt, atomically replaces the on-disk
+// binaries, and regenerates the integrity manifest so the wrappers
+// keep matching the binaries they front.
+func cmdUpdate(args []string) int {
+	fs := flag.NewFlagSet("update", flag.ContinueOnError)
+	fs.SetOutput(os.Stderr)
+	check := fs.Bool("check", false, "print current vs latest and exit; don't install")
+	force := fs.Bool("force", false, "reinstall even when current matches target; allow downgrade")
+	tgt := fs.String("version", "", "pin to a specific tag (e.g. v0.9.7); empty = latest")
+	dir := fs.String("install-dir", "", "where to write binaries (default: dir holding the running watchdog-shim)")
+	if err := fs.Parse(args); err != nil {
+		return 2
+	}
+
+	current := version.String()
+	opts := selfupdate.Options{
+		CurrentVersion: current,
+		TargetVersion:  *tgt,
+		InstallDir:     *dir,
+		Force:          *force,
+		CheckOnly:      *check,
+	}
+	plan, err := selfupdate.Resolve(opts)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "update: %v\n", err)
+		return 1
+	}
+
+	fmt.Printf("Current: %s\nTarget:  %s (%s/%s)\nInstall: %s\n",
+		safeVersion(current), plan.Target, plan.OS, plan.Arch, plan.InstallDir)
+	if *check {
+		switch {
+		case plan.NoOp:
+			fmt.Println("Status:  up to date")
+		case plan.Downgrade:
+			fmt.Println("Status:  target is older than current — pass --force to downgrade")
+		default:
+			fmt.Println("Status:  update available")
+		}
+		return 0
+	}
+
+	audit.Record("update.started", map[string]any{
+		"current":     current,
+		"target":      plan.Target,
+		"install_dir": plan.InstallDir,
+		"force":       *force,
+	})
+
+	installed, err := plan.Apply(os.Stdout, opts)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "update failed: %v\n", err)
+		audit.Record("update.failed", map[string]any{
+			"target": plan.Target,
+			"error":  err.Error(),
+		})
+		return 1
+	}
+	if len(installed) == 0 {
+		// NoOp / nothing to do; the Apply already printed the reason.
+		return 0
+	}
+
+	// Regenerate the integrity manifest so it reflects the new binary
+	// hashes. Skipped on failure with a warning — the user can re-run
+	// `watchdog-shim install` to rebuild the manifest if this leg
+	// flakes (e.g. cache dir suddenly unwritable).
+	if m, mErr := integrity.Build(); mErr == nil {
+		if wErr := integrity.WriteManifest(m); wErr == nil {
+			fmt.Printf("manifest rebuilt at %s (%d binaries, %d shims)\n",
+				paths.ManifestPath(), len(m.Binaries), len(m.Shims))
+		} else {
+			fmt.Fprintf(os.Stderr, "warning: manifest write failed: %v\n", wErr)
+		}
+	} else {
+		fmt.Fprintf(os.Stderr, "warning: manifest rebuild failed: %v\n", mErr)
+	}
+
+	audit.Record("update.completed", map[string]any{
+		"current":   current,
+		"target":    plan.Target,
+		"binaries":  installed,
+		"writeable": plan.InstallDir,
+	})
+	fmt.Printf("\nUpdated %s → %s.\n", safeVersion(current), plan.Target)
+	return 0
+}
+
+// safeVersion returns "(unknown)" instead of an empty string so the
+// printed status lines do not read "Current: ".
+func safeVersion(v string) string {
+	v = strings.TrimSpace(v)
+	if v == "" {
+		return "(unknown)"
+	}
+	return v
 }

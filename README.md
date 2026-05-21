@@ -92,7 +92,7 @@ Pick whichever applies.
 curl -fsSL https://raw.githubusercontent.com/Maxlemore97/Watchdog/main/install.sh | sh
 ```
 
-Pulls the latest release for your OS+arch, verifies SHA-256 against the published `checksums.txt`, and drops eight binaries into `~/.local/bin`. Override the destination with `WATCHDOG_INSTALL_DIR`. Pin a version with `WATCHDOG_VERSION=v0.9.7 sh install.sh`.
+Pulls the latest release for your OS+arch, verifies SHA-256 against the published `checksums.txt`, and drops eight binaries into `~/.local/bin`. Override the destination with `WATCHDOG_INSTALL_DIR`. Pin a version with `WATCHDOG_VERSION=v0.9.8 sh install.sh`.
 
 ### B. Install script (Windows PowerShell)
 
@@ -182,6 +182,19 @@ watchdog-shim status   # per-tool install state
 ```
 
 To remove later: `watchdog-shim uninstall`. It only deletes scripts that carry the `Watchdog shim` marker (so your own binaries are untouched) and removes the manifest so the hook fallback correctly distinguishes a clean uninstall from a tamper.
+
+### Updating
+
+Re-running `install.sh` still works, but `watchdog-shim update` is the in-process equivalent and is easier to remember once Watchdog is on PATH:
+
+```bash
+watchdog-shim update --check                  # current vs latest, exit 0
+watchdog-shim update                          # download latest, verify sha256, atomic replace
+watchdog-shim update --version v0.9.5         # pin to a specific tag
+watchdog-shim update --force                  # reinstall same version or downgrade
+```
+
+The update path matches `install.sh`: same tarball, same `checksums.txt`, same eight binaries. The Go implementation adds two things on top: target binaries are staged into `.new` files and only renamed once the whole archive is verified (so a partial download cannot leave a broken install), and the integrity manifest is rebuilt in the same process so the hot-path hash checks keep matching the binaries they front. Downgrades are refused without `--force`. Windows is not yet supported — use `install.ps1` there.
 
 If a cached verdict turns out to be wrong, you can inspect and prune the cache:
 
@@ -469,7 +482,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with: { fetch-depth: 0 }
-      - uses: Maxlemore97/Watchdog@v0.9.7
+      - uses: Maxlemore97/Watchdog@v0.9.8
         with:
           fail-on: deny     # deny | ask | never
 ```
@@ -653,7 +666,7 @@ go test -race ./...
 Releases stamp the version via ldflags so each binary reports it through `--version`:
 
 ```bash
-go build -ldflags '-X github.com/Maxlemore97/watchdog/internal/version.Version=v0.9.7' ./...
+go build -ldflags '-X github.com/Maxlemore97/watchdog/internal/version.Version=v0.9.8' ./...
 ```
 
 Unstamped builds report `dev`. Release builds may additionally stamp `internal/integrity.BaselinePubKey` with a base64 Ed25519 verifier public key — when set, every binary checks `~/.watchdog/baseline.json` against its release signature and reports drift via `BASELINE_BINARY_DRIFT`. Unstamped builds skip baseline verification silently.
