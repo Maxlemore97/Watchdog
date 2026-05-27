@@ -75,7 +75,20 @@ func fakeRelease(t *testing.T, tag string, archiveBytes []byte) (apiURL, baseURL
 	return srv.URL + "/api", srv.URL, archiveName
 }
 
+// skipOnWindows centralises the runtime guard. Resolve calls
+// detectOSArch which deliberately rejects Windows, so every
+// Resolve/Apply test must short-circuit on that platform. The
+// production code path (cmdUpdate) reports the same error to the
+// user verbatim.
+func skipOnWindows(t *testing.T) {
+	t.Helper()
+	if runtime.GOOS == "windows" {
+		t.Skip("self-update is not supported on Windows")
+	}
+}
+
 func TestResolve_PinsExplicitVersion(t *testing.T) {
+	skipOnWindows(t)
 	p, err := Resolve(Options{TargetVersion: "v1.2.3", InstallDir: t.TempDir()})
 	if err != nil {
 		t.Fatal(err)
@@ -89,6 +102,7 @@ func TestResolve_PinsExplicitVersion(t *testing.T) {
 }
 
 func TestResolve_AddsVPrefix(t *testing.T) {
+	skipOnWindows(t)
 	p, err := Resolve(Options{TargetVersion: "1.2.3", InstallDir: t.TempDir()})
 	if err != nil {
 		t.Fatal(err)
@@ -99,6 +113,7 @@ func TestResolve_AddsVPrefix(t *testing.T) {
 }
 
 func TestResolve_DetectsNoOpOnExactMatch(t *testing.T) {
+	skipOnWindows(t)
 	p, err := Resolve(Options{CurrentVersion: "v0.9.5", TargetVersion: "v0.9.5", InstallDir: t.TempDir()})
 	if err != nil {
 		t.Fatal(err)
@@ -109,6 +124,7 @@ func TestResolve_DetectsNoOpOnExactMatch(t *testing.T) {
 }
 
 func TestResolve_ForceOverridesNoOp(t *testing.T) {
+	skipOnWindows(t)
 	p, err := Resolve(Options{CurrentVersion: "v0.9.5", TargetVersion: "v0.9.5", Force: true, InstallDir: t.TempDir()})
 	if err != nil {
 		t.Fatal(err)
@@ -119,6 +135,7 @@ func TestResolve_ForceOverridesNoOp(t *testing.T) {
 }
 
 func TestResolve_DetectsDowngrade(t *testing.T) {
+	skipOnWindows(t)
 	p, err := Resolve(Options{CurrentVersion: "v0.9.7", TargetVersion: "v0.9.5", InstallDir: t.TempDir()})
 	if err != nil {
 		t.Fatal(err)
@@ -129,6 +146,7 @@ func TestResolve_DetectsDowngrade(t *testing.T) {
 }
 
 func TestResolve_NewerNotDowngrade(t *testing.T) {
+	skipOnWindows(t)
 	p, err := Resolve(Options{CurrentVersion: "v0.9.5", TargetVersion: "v0.9.7", InstallDir: t.TempDir()})
 	if err != nil {
 		t.Fatal(err)

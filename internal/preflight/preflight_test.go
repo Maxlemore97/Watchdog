@@ -188,10 +188,10 @@ func TestPackages_AboveDefaultCapReturnsAsk(t *testing.T) {
 }
 
 func TestPackages_MaxPackagesOverrideRaisesCap(t *testing.T) {
-	var osvCalls int
+	var osvCalls atomic.Int32
 	restore := withStubs(t,
 		func(types.Package) ([]map[string]any, error) {
-			osvCalls++
+			osvCalls.Add(1)
 			return nil, nil
 		},
 		func(string, string, string) map[string]any { return nil },
@@ -205,8 +205,8 @@ func TestPackages_MaxPackagesOverrideRaisesCap(t *testing.T) {
 	if r.Verdict == "ask" && strings.Contains(r.Reason, "too many packages") {
 		t.Errorf("override should bypass the default cap; got %q / %q", r.Verdict, r.Reason)
 	}
-	if osvCalls != len(pkgs) {
-		t.Errorf("expected all %d pkgs scanned under override; got %d", len(pkgs), osvCalls)
+	if int(osvCalls.Load()) != len(pkgs) {
+		t.Errorf("expected all %d pkgs scanned under override; got %d", len(pkgs), osvCalls.Load())
 	}
 }
 
