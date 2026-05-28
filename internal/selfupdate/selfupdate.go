@@ -15,6 +15,7 @@ package selfupdate
 
 import (
 	"archive/tar"
+	"archive/zip"
 	"compress/gzip"
 	"crypto/sha256"
 	"encoding/hex"
@@ -122,7 +123,15 @@ func Resolve(opts Options) (*Plan, error) {
 		dir = defaultInstallDir()
 	}
 	bare := strings.TrimPrefix(target, "v")
-	archive := fmt.Sprintf("watchdog_%s_%s_%s.tar.gz", bare, osName, archName)
+	// goreleaser ships Windows builds as .zip (so a Windows user can
+	// double-click extract without a tar utility) and POSIX builds as
+	// .tar.gz. Mirror that decision here so the archive name in Plan
+	// matches what's actually on the release page.
+	ext := "tar.gz"
+	if osName == "windows" {
+		ext = "zip"
+	}
+	archive := fmt.Sprintf("watchdog_%s_%s_%s.%s", bare, osName, archName, ext)
 	base := opts.BaseURL
 	if base == "" {
 		base = "https://github.com"
@@ -146,9 +155,6 @@ func Resolve(opts Options) (*Plan, error) {
 // the list of binaries actually written. progress, if non-nil, gets
 // human-readable status lines.
 func (p *Plan) Apply(progress io.Writer, opts Options) ([]string, error) {
-	if runtime.GOOS == "windows" {
-		return nil, fmt.Errorf("self-update is not supported on Windows yet; use install.ps1")
-	}
 	if p.NoOp {
 		fmt.Fprintf(progress, "watchdog-shim update: already on %s; pass --force to reinstall.\n", p.Target)
 		return nil, nil
@@ -197,7 +203,7 @@ func (p *Plan) Apply(progress io.Writer, opts Options) ([]string, error) {
 	if err := os.Mkdir(extractDir, 0o755); err != nil {
 		return nil, fmt.Errorf("mkdir extract: %w", err)
 	}
-	if err := extractTarGz(archivePath, extractDir); err != nil {
+	if err := extractArchive(archivePath, extractDir); err != nil {
 		return nil, fmt.Errorf("extract: %w", err)
 	}
 
@@ -212,29 +218,77 @@ func (p *Plan) Apply(progress io.Writer, opts Options) ([]string, error) {
 	}
 	_ = os.Remove(probe)
 
+	// Best-effort cleanup of `.old` files left behind by a previous
+	// Windows update (where the running .exe was renamed aside before
+	// the new bytes landed). POSIX never produces these. Errors are
+	// ignored: a stale `.old` is harmless and only happens when the
+	// running watchdog-shim is itself updated.
+	for _, name := range Binaries {
+		_ = os.Remove(filepath.Join(p.InstallDir, platformBinaryName(name)+".old"))
+	}
+
 	installed := []string{}
 	for _, name := range Binaries {
-		src := filepath.Join(extractDir, name)
+		binName := platformBinaryName(name)
+		src := filepath.Join(extractDir, binName)
 		if _, err := os.Stat(src); err != nil {
 			// Skip absent binaries silently — the release manifest
-			// may shrink in future versions, and an older tarball
+			// may shrink in future versions, and an older archive
 			// missing a binary should not crater the update.
 			continue
 		}
-		dst := filepath.Join(p.InstallDir, name)
+		dst := filepath.Join(p.InstallDir, binName)
 		stage := dst + ".new"
 		if err := copyFile(src, stage, 0o755); err != nil {
-			return installed, fmt.Errorf("stage %s: %w", name, err)
+			return installed, fmt.Errorf("stage %s: %w", binName, err)
 		}
-		if err := os.Rename(stage, dst); err != nil {
+		if err := atomicReplace(stage, dst); err != nil {
 			_ = os.Remove(stage)
-			return installed, fmt.Errorf("install %s: %w", name, err)
+			return installed, fmt.Errorf("install %s: %w", binName, err)
 		}
-		installed = append(installed, name)
+		installed = append(installed, binName)
 	}
 	fmt.Fprintf(progress, "watchdog-shim update: %d binaries installed into %s\n", len(installed), p.InstallDir)
 
 	return installed, nil
+}
+
+// platformBinaryName appends `.exe` on Windows so the archive lookup
+// matches what goreleaser ships. POSIX builds carry no suffix.
+func platformBinaryName(name string) string {
+	if runtime.GOOS == "windows" {
+		return name + ".exe"
+	}
+	return name
+}
+
+// atomicReplace puts stage at dst with the strongest guarantee the
+// platform offers.
+//
+// POSIX: `rename(2)` over an existing file is atomic, and the kernel
+// keeps the in-memory inode of any running process alive, so it works
+// even if dst is the currently-running watchdog-shim.
+//
+// Windows: `rename` over a running .exe returns ERROR_SHARING_VIOLATION
+// because the loader keeps a deny-write handle. The standard
+// workaround is rename-self-aside first — Windows allows renaming a
+// running .exe to a new path, which frees the original path for the
+// new file. The renamed-aside .old binary stays on disk until the
+// next update sweeps it up; that's why Apply does a best-effort
+// cleanup pass before this point.
+func atomicReplace(stage, dst string) error {
+	if runtime.GOOS == "windows" {
+		if _, err := os.Stat(dst); err == nil {
+			oldPath := dst + ".old"
+			// Remove any prior .old so the rename below doesn't trip
+			// on an existing target. Ignored if absent.
+			_ = os.Remove(oldPath)
+			if err := os.Rename(dst, oldPath); err != nil {
+				return fmt.Errorf("free %s (file in use?): %w", dst, err)
+			}
+		}
+	}
+	return os.Rename(stage, dst)
 }
 
 // detectOSArch maps Go's runtime constants to the release naming
@@ -242,7 +296,7 @@ func (p *Plan) Apply(progress io.Writer, opts Options) ([]string, error) {
 func detectOSArch() (string, string, error) {
 	var osName string
 	switch runtime.GOOS {
-	case "darwin", "linux":
+	case "darwin", "linux", "windows":
 		osName = runtime.GOOS
 	default:
 		return "", "", fmt.Errorf("unsupported OS for self-update: %s", runtime.GOOS)
@@ -365,6 +419,65 @@ func sha256File(path string) (string, error) {
 		return "", err
 	}
 	return hex.EncodeToString(h.Sum(nil)), nil
+}
+
+// extractArchive dispatches by suffix. tar.gz on POSIX, zip on Windows.
+// Both call sites flow through the same path-traversal guard and
+// regular-file filter via the underlying extractors.
+func extractArchive(archive, dst string) error {
+	switch {
+	case strings.HasSuffix(archive, ".zip"):
+		return extractZip(archive, dst)
+	case strings.HasSuffix(archive, ".tar.gz") || strings.HasSuffix(archive, ".tgz"):
+		return extractTarGz(archive, dst)
+	default:
+		return fmt.Errorf("unsupported archive format: %s", archive)
+	}
+}
+
+// extractZip is the Windows companion to extractTarGz. Same path-
+// traversal guard, same regular-file-only policy. zip entries don't
+// carry a Unix mode bit reliably, so every extracted file lands at
+// 0o755 — release zips only contain executable binaries, README,
+// LICENSE, SECURITY.md, none of which need a tighter mode.
+func extractZip(archive, dst string) error {
+	r, err := zip.OpenReader(archive)
+	if err != nil {
+		return err
+	}
+	defer r.Close()
+	for _, f := range r.File {
+		if f.FileInfo().IsDir() {
+			continue
+		}
+		name := filepath.Clean(f.Name)
+		if strings.HasPrefix(name, "..") || strings.Contains(name, string(filepath.Separator)+"..") {
+			return fmt.Errorf("zip entry escapes target: %q", f.Name)
+		}
+		out := filepath.Join(dst, name)
+		if err := os.MkdirAll(filepath.Dir(out), 0o755); err != nil {
+			return err
+		}
+		rc, err := f.Open()
+		if err != nil {
+			return err
+		}
+		w, err := os.OpenFile(out, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o755)
+		if err != nil {
+			rc.Close()
+			return err
+		}
+		if _, err := io.Copy(w, rc); err != nil {
+			rc.Close()
+			w.Close()
+			return err
+		}
+		rc.Close()
+		if err := w.Close(); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func extractTarGz(archive, dst string) error {

@@ -92,7 +92,7 @@ Pick whichever applies.
 curl -fsSL https://raw.githubusercontent.com/Maxlemore97/Watchdog/main/install.sh | sh
 ```
 
-Pulls the latest release for your OS+arch, verifies SHA-256 against the published `checksums.txt`, and drops eight binaries into `~/.local/bin`. Override the destination with `WATCHDOG_INSTALL_DIR`. Pin a version with `WATCHDOG_VERSION=v0.9.8 sh install.sh`.
+Pulls the latest release for your OS+arch, verifies SHA-256 against the published `checksums.txt`, and drops eight binaries into `~/.local/bin`. Override the destination with `WATCHDOG_INSTALL_DIR`. Pin a version with `WATCHDOG_VERSION=v0.9.9 sh install.sh`.
 
 ### B. Install script (Windows PowerShell)
 
@@ -194,7 +194,9 @@ watchdog-shim update --version v0.9.5         # pin to a specific tag
 watchdog-shim update --force                  # reinstall same version or downgrade
 ```
 
-The update path matches `install.sh`: same tarball, same `checksums.txt`, same eight binaries. The Go implementation adds two things on top: target binaries are staged into `.new` files and only renamed once the whole archive is verified (so a partial download cannot leave a broken install), and the integrity manifest is rebuilt in the same process so the hot-path hash checks keep matching the binaries they front. Downgrades are refused without `--force`. Windows is not yet supported — use `install.ps1` there.
+The update path matches `install.sh`: same eight binaries, same `checksums.txt`. Linux and macOS pull the `tar.gz`; Windows pulls the `zip` (goreleaser ships both formats from the same release). The Go implementation adds two things on top: target binaries are staged into `.new` files and only renamed once the whole archive is verified (so a partial download cannot leave a broken install), and the integrity manifest is rebuilt in the same process so the hot-path hash checks keep matching the binaries they front. Downgrades are refused without `--force`.
+
+On Windows the running `watchdog-shim.exe` holds a deny-write lock on its own image, so the in-process update first renames the existing `.exe` to `.exe.old` (rename-aside is permitted on a running binary) before dropping the new bytes at the original path. The `.old` files are best-effort-cleaned on the next update run.
 
 If a cached verdict turns out to be wrong, you can inspect and prune the cache:
 
@@ -482,7 +484,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with: { fetch-depth: 0 }
-      - uses: Maxlemore97/Watchdog@v0.9.8
+      - uses: Maxlemore97/Watchdog@v0.9.9
         with:
           fail-on: deny     # deny | ask | never
 ```
@@ -666,7 +668,7 @@ go test -race ./...
 Releases stamp the version via ldflags so each binary reports it through `--version`:
 
 ```bash
-go build -ldflags '-X github.com/Maxlemore97/watchdog/internal/version.Version=v0.9.8' ./...
+go build -ldflags '-X github.com/Maxlemore97/watchdog/internal/version.Version=v0.9.9' ./...
 ```
 
 Unstamped builds report `dev`. Release builds may additionally stamp `internal/integrity.BaselinePubKey` with a base64 Ed25519 verifier public key — when set, every binary checks `~/.watchdog/baseline.json` against its release signature and reports drift via `BASELINE_BINARY_DRIFT`. Unstamped builds skip baseline verification silently.

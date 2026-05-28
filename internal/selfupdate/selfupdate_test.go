@@ -2,6 +2,7 @@ package selfupdate
 
 import (
 	"archive/tar"
+	"archive/zip"
 	"bytes"
 	"compress/gzip"
 	"crypto/sha256"
@@ -17,10 +18,20 @@ import (
 	"testing"
 )
 
-// buildArchive returns a gzipped tarball containing the requested
-// (name → bytes) entries with mode 0755. Used by the integration
-// tests to stand up a fake GitHub release.
+// buildArchive returns the host-OS-appropriate archive (zip on
+// Windows, tar.gz elsewhere) containing the requested entries with
+// mode 0755. Mirrors goreleaser's platform-conditional archive
+// format so the test exercises the same extraction path the
+// production binary takes.
 func buildArchive(t *testing.T, entries map[string][]byte) []byte {
+	t.Helper()
+	if runtime.GOOS == "windows" {
+		return buildZip(t, entries)
+	}
+	return buildTarGz(t, entries)
+}
+
+func buildTarGz(t *testing.T, entries map[string][]byte) []byte {
 	t.Helper()
 	var buf bytes.Buffer
 	gz := gzip.NewWriter(&buf)
@@ -48,6 +59,45 @@ func buildArchive(t *testing.T, entries map[string][]byte) []byte {
 	return buf.Bytes()
 }
 
+func buildZip(t *testing.T, entries map[string][]byte) []byte {
+	t.Helper()
+	var buf bytes.Buffer
+	zw := zip.NewWriter(&buf)
+	for name, body := range entries {
+		hdr := &zip.FileHeader{Name: name, Method: zip.Deflate}
+		hdr.SetMode(0o755)
+		w, err := zw.CreateHeader(hdr)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := w.Write(body); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := zw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	return buf.Bytes()
+}
+
+// archiveSuffix returns the host-OS archive extension. Matches the
+// suffix Resolve computes so tests built via fakeRelease line up.
+func archiveSuffix() string {
+	if runtime.GOOS == "windows" {
+		return "zip"
+	}
+	return "tar.gz"
+}
+
+// archiveBinaryName returns the platform-specific binary filename
+// inside the archive. Windows builds get `.exe`; POSIX builds do not.
+func archiveBinaryName(name string) string {
+	if runtime.GOOS == "windows" {
+		return name + ".exe"
+	}
+	return name
+}
+
 // fakeRelease stands up an httptest server that serves the two URLs
 // Resolve+Apply need: the latest-tag JSON and the archive + checksums
 // pair for a given tag.
@@ -55,7 +105,7 @@ func fakeRelease(t *testing.T, tag string, archiveBytes []byte) (apiURL, baseURL
 	t.Helper()
 	osName, archName := runtime.GOOS, runtime.GOARCH
 	bare := strings.TrimPrefix(tag, "v")
-	archiveName = fmt.Sprintf("watchdog_%s_%s_%s.tar.gz", bare, osName, archName)
+	archiveName = fmt.Sprintf("watchdog_%s_%s_%s.%s", bare, osName, archName, archiveSuffix())
 	sum := sha256.Sum256(archiveBytes)
 	sumHex := hex.EncodeToString(sum[:])
 	checksums := []byte(fmt.Sprintf("%s  %s\n", sumHex, archiveName))
@@ -75,20 +125,7 @@ func fakeRelease(t *testing.T, tag string, archiveBytes []byte) (apiURL, baseURL
 	return srv.URL + "/api", srv.URL, archiveName
 }
 
-// skipOnWindows centralises the runtime guard. Resolve calls
-// detectOSArch which deliberately rejects Windows, so every
-// Resolve/Apply test must short-circuit on that platform. The
-// production code path (cmdUpdate) reports the same error to the
-// user verbatim.
-func skipOnWindows(t *testing.T) {
-	t.Helper()
-	if runtime.GOOS == "windows" {
-		t.Skip("self-update is not supported on Windows")
-	}
-}
-
 func TestResolve_PinsExplicitVersion(t *testing.T) {
-	skipOnWindows(t)
 	p, err := Resolve(Options{TargetVersion: "v1.2.3", InstallDir: t.TempDir()})
 	if err != nil {
 		t.Fatal(err)
@@ -102,7 +139,6 @@ func TestResolve_PinsExplicitVersion(t *testing.T) {
 }
 
 func TestResolve_AddsVPrefix(t *testing.T) {
-	skipOnWindows(t)
 	p, err := Resolve(Options{TargetVersion: "1.2.3", InstallDir: t.TempDir()})
 	if err != nil {
 		t.Fatal(err)
@@ -113,7 +149,6 @@ func TestResolve_AddsVPrefix(t *testing.T) {
 }
 
 func TestResolve_DetectsNoOpOnExactMatch(t *testing.T) {
-	skipOnWindows(t)
 	p, err := Resolve(Options{CurrentVersion: "v0.9.5", TargetVersion: "v0.9.5", InstallDir: t.TempDir()})
 	if err != nil {
 		t.Fatal(err)
@@ -124,7 +159,6 @@ func TestResolve_DetectsNoOpOnExactMatch(t *testing.T) {
 }
 
 func TestResolve_ForceOverridesNoOp(t *testing.T) {
-	skipOnWindows(t)
 	p, err := Resolve(Options{CurrentVersion: "v0.9.5", TargetVersion: "v0.9.5", Force: true, InstallDir: t.TempDir()})
 	if err != nil {
 		t.Fatal(err)
@@ -135,7 +169,6 @@ func TestResolve_ForceOverridesNoOp(t *testing.T) {
 }
 
 func TestResolve_DetectsDowngrade(t *testing.T) {
-	skipOnWindows(t)
 	p, err := Resolve(Options{CurrentVersion: "v0.9.7", TargetVersion: "v0.9.5", InstallDir: t.TempDir()})
 	if err != nil {
 		t.Fatal(err)
@@ -146,7 +179,6 @@ func TestResolve_DetectsDowngrade(t *testing.T) {
 }
 
 func TestResolve_NewerNotDowngrade(t *testing.T) {
-	skipOnWindows(t)
 	p, err := Resolve(Options{CurrentVersion: "v0.9.5", TargetVersion: "v0.9.7", InstallDir: t.TempDir()})
 	if err != nil {
 		t.Fatal(err)
@@ -157,13 +189,10 @@ func TestResolve_NewerNotDowngrade(t *testing.T) {
 }
 
 func TestApply_HappyPath(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("self-update Apply not supported on Windows")
-	}
 	dir := t.TempDir()
 	entries := map[string][]byte{}
 	for _, b := range Binaries {
-		entries[b] = []byte("#!/bin/sh\nexit 0\n")
+		entries[archiveBinaryName(b)] = []byte("#!/bin/sh\nexit 0\n")
 	}
 	tag := "v9.9.9"
 	apiURL, baseURL, _ := fakeRelease(t, tag, buildArchive(t, entries))
@@ -186,28 +215,30 @@ func TestApply_HappyPath(t *testing.T) {
 		t.Errorf("installed %d, expected %d", len(installed), len(Binaries))
 	}
 	for _, name := range Binaries {
-		st, err := os.Stat(filepath.Join(dir, name))
+		st, err := os.Stat(filepath.Join(dir, archiveBinaryName(name)))
 		if err != nil {
 			t.Errorf("%s missing: %v", name, err)
 			continue
 		}
-		if st.Mode().Perm()&0o100 == 0 {
+		// Windows ignores Unix execute bits but the file should exist
+		// and be non-empty.
+		if runtime.GOOS != "windows" && st.Mode().Perm()&0o100 == 0 {
 			t.Errorf("%s not executable: %v", name, st.Mode())
+		}
+		if st.Size() == 0 {
+			t.Errorf("%s is empty", name)
 		}
 	}
 }
 
 func TestApply_RejectsChecksumMismatch(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip()
-	}
 	dir := t.TempDir()
-	good := buildArchive(t, map[string][]byte{"watchdog-shim": []byte("hi")})
+	good := buildArchive(t, map[string][]byte{archiveBinaryName("watchdog-shim"): []byte("hi")})
 	// serve a checksums.txt whose hash matches `good`, but serve a
 	// *different* archive — that's the on-the-wire tamper we're
 	// guarding against.
 	osName, archName := runtime.GOOS, runtime.GOARCH
-	archive := fmt.Sprintf("watchdog_8.8.8_%s_%s.tar.gz", osName, archName)
+	archive := fmt.Sprintf("watchdog_8.8.8_%s_%s.%s", osName, archName, archiveSuffix())
 	sum := sha256.Sum256(good)
 	sumHex := hex.EncodeToString(sum[:])
 	bad := []byte("wrong bytes")
@@ -233,12 +264,9 @@ func TestApply_RejectsChecksumMismatch(t *testing.T) {
 }
 
 func TestApply_RefusesDowngradeWithoutForce(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip()
-	}
 	dir := t.TempDir()
 	tag := "v0.0.1"
-	_, baseURL, _ := fakeRelease(t, tag, buildArchive(t, map[string][]byte{"watchdog-shim": []byte("x")}))
+	_, baseURL, _ := fakeRelease(t, tag, buildArchive(t, map[string][]byte{archiveBinaryName("watchdog-shim"): []byte("x")}))
 	plan, err := Resolve(Options{
 		CurrentVersion: "v0.9.9",
 		TargetVersion:  tag,
@@ -255,9 +283,6 @@ func TestApply_RefusesDowngradeWithoutForce(t *testing.T) {
 }
 
 func TestApply_NoOpSkipsDownload(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip()
-	}
 	dir := t.TempDir()
 	plan, err := Resolve(Options{
 		CurrentVersion: "v0.9.7",
@@ -283,13 +308,11 @@ func TestApply_NoOpSkipsDownload(t *testing.T) {
 	}
 }
 
-func TestExtractTarGz_RejectsPathTraversal(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip()
-	}
+func TestExtractArchive_RejectsPathTraversal(t *testing.T) {
 	dir := t.TempDir()
 	bad := buildArchive(t, map[string][]byte{"../escape": []byte("nope")})
-	archivePath := filepath.Join(dir, "bad.tar.gz")
+	suffix := archiveSuffix()
+	archivePath := filepath.Join(dir, "bad."+suffix)
 	if err := os.WriteFile(archivePath, bad, 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -297,9 +320,47 @@ func TestExtractTarGz_RejectsPathTraversal(t *testing.T) {
 	if err := os.Mkdir(out, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	err := extractTarGz(archivePath, out)
+	err := extractArchive(archivePath, out)
 	if err == nil || !strings.Contains(err.Error(), "escape") {
 		t.Errorf("expected escape rejection, got %v", err)
+	}
+}
+
+// TestAtomicReplace_WindowsRenamesExistingAside pins the Windows
+// self-overwrite workaround. On POSIX, rename-over-existing is
+// atomic and leaves no .old file. On Windows, the prior dst is
+// renamed to dst+".old" first so the path frees up for the staged
+// .new file. The test runs everywhere and asserts the per-OS
+// invariant.
+func TestAtomicReplace_WindowsRenamesExistingAside(t *testing.T) {
+	dir := t.TempDir()
+	dst := filepath.Join(dir, "watchdog-shim")
+	if runtime.GOOS == "windows" {
+		dst += ".exe"
+	}
+	if err := os.WriteFile(dst, []byte("old"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	stage := dst + ".new"
+	if err := os.WriteFile(stage, []byte("new"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := atomicReplace(stage, dst); err != nil {
+		t.Fatalf("atomicReplace: %v", err)
+	}
+	got, err := os.ReadFile(dst)
+	if err != nil || string(got) != "new" {
+		t.Errorf("dst contents = %q (err=%v), want %q", got, err, "new")
+	}
+	oldPath := dst + ".old"
+	if runtime.GOOS == "windows" {
+		if _, err := os.Stat(oldPath); err != nil {
+			t.Errorf("Windows path: expected %s (rename-aside), missing: %v", oldPath, err)
+		}
+	} else {
+		if _, err := os.Stat(oldPath); !os.IsNotExist(err) {
+			t.Errorf("POSIX path: no .old should exist; got err=%v", err)
+		}
 	}
 }
 
