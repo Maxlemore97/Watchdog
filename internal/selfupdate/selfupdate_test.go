@@ -133,8 +133,9 @@ func TestResolve_PinsExplicitVersion(t *testing.T) {
 	if p.Target != "v1.2.3" {
 		t.Errorf("target = %q", p.Target)
 	}
-	if !strings.HasSuffix(p.Archive, ".tar.gz") || !strings.Contains(p.Archive, "1.2.3") {
-		t.Errorf("archive = %q", p.Archive)
+	wantSuffix := "." + archiveSuffix()
+	if !strings.HasSuffix(p.Archive, wantSuffix) || !strings.Contains(p.Archive, "1.2.3") {
+		t.Errorf("archive = %q (want suffix %q, contain %q)", p.Archive, wantSuffix, "1.2.3")
 	}
 }
 
