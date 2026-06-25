@@ -11,6 +11,7 @@
 # Clean-uninstall path: binary missing AND no manifest → exit 0.
 set -eu
 
+# shellcheck source-path=SCRIPTDIR
 # shellcheck source=lib/resolve.sh
 . "$(dirname "$0")/lib/resolve.sh"
 

@@ -2,6 +2,7 @@
 # Watchdog SessionStart hook wrapper.
 set -eu
 
+# shellcheck source-path=SCRIPTDIR
 # shellcheck source=lib/resolve.sh
 . "$(dirname "$0")/lib/resolve.sh"
 
