@@ -64,11 +64,11 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: shellcheck
-        # -x lets shellcheck follow `source` directives so hooks/*.sh
-        # don't trip SC1091 on hooks/lib/resolve.sh. The lib/ scripts
-        # are sourced fragments, not standalone hooks, so they don't
-        # need a separate lint pass.
-        run: shellcheck -x install.sh hooks/*.sh
+        # -x follows `source` directives; -P sets the search path for
+        # those directives. With both, hooks/*.sh can `source
+        # lib/resolve.sh` and shellcheck resolves it to
+        # hooks/lib/resolve.sh regardless of CWD.
+        run: shellcheck -x -P hooks install.sh hooks/*.sh
 
   fuzz:
     name: parser fuzz (smoke)
