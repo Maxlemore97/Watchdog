@@ -367,7 +367,8 @@ jq -c 'select(.event | startswith("integrity") or startswith("tamper"))' \
 
 - `SIGNATURE_INVALID` — manifest content changed without re-signing → hard fail, deny installs.
 - `SIGNATURE_KEY_MISSING` — manifest claims a signature but `~/.watchdog/.signing.pub` is gone → hard fail.
-- `SIGNATURE_MISSING` — legacy v1 manifest (pre-signing) → soft warning; next install upgrades it.
+- `SIGNATURE_MISSING` — legacy v1 manifest (pre-signing, no signing key on disk) → soft warning; next install upgrades it. An unsigned manifest next to an existing signing key (or with schema v2+) is a stripped signature → hard fail.
+- `MANIFEST_REMOVED` — manifest gone while the signing key or shim wrappers still exist → hard fail. Only a never-installed setup gets the lenient `MANIFEST_MISSING` path.
 
 Decision tokens follow the same pattern. Unsigned or invalid tokens are rejected (`ErrUnsignedToken`); the shim falls back to a fresh preflight. A filesystem-write attacker who also reads `~/.watchdog/.signing.key` can still forge signatures — local-key signing is *detection*, not prevention.
 

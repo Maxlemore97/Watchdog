@@ -3,7 +3,9 @@ package integrity
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -23,6 +25,7 @@ func sha256Hex(data []byte) string {
 const (
 	CodeDisabled            = "DISABLED"
 	CodeManifestMissing     = "MANIFEST_MISSING"
+	CodeManifestRemoved     = "MANIFEST_REMOVED"
 	CodeManifestCorrupt     = "MANIFEST_CORRUPT"
 	CodePathNotShimFirst    = "PATH_NOT_SHIM_FIRST"
 	CodeSelfHashMismatch    = "SELF_HASH_MISMATCH"
@@ -92,6 +95,19 @@ func (s Status) FirstReason() string {
 		return fmt.Sprintf("%s — %s", f.Code, f.Detail)
 	}
 	return f.Code
+}
+
+// installArtifactsPresent reports whether files that only
+// `watchdog-shim install` creates exist: the local signing key or a
+// populated shim dir.
+func installArtifactsPresent() bool {
+	for _, p := range []string{PublicKeyPath(), PrivateKeyPath()} {
+		if _, err := os.Stat(p); err == nil {
+			return true
+		}
+	}
+	entries, err := os.ReadDir(shimDirForCheck(nil))
+	return err == nil && len(entries) > 0
 }
 
 // shimDirForCheck mirrors the resolution in cmd/watchdog-shim-exec
@@ -185,7 +201,18 @@ func computeStatus(deep bool) Status {
 	st := Status{OK: true}
 	m, err := LoadManifest()
 	if err != nil {
-		if os.IsNotExist(err) {
+		if errors.Is(err, fs.ErrNotExist) && installArtifactsPresent() {
+			// The signing key or shim wrappers prove `watchdog-shim
+			// install` ran, so a missing manifest is a deletion, not
+			// a manual install. Fail hard instead of the lenient
+			// ManifestMissing path (one `rm` must not switch off
+			// enforcement).
+			st.Failures = append(st.Failures, Failure{
+				Code:   CodeManifestRemoved,
+				Path:   paths.ManifestPath(),
+				Detail: "manifest missing but install artifacts present (signing key / shim dir) — re-run watchdog-shim install",
+			})
+		} else if errors.Is(err, fs.ErrNotExist) {
 			st.ManifestMissing = true
 			st.Failures = append(st.Failures, Failure{
 				Code:   CodeManifestMissing,
@@ -268,8 +295,21 @@ func computeStatus(deep bool) Status {
 // the failure mode (soft vs hard) is encoded in the OK flag.
 func verifyManifestSignature(m *Manifest, st *Status) {
 	if m.Signature == "" {
-		// Legacy v1 manifest. Soft failure so old installs keep
-		// working; re-running install upgrades them.
+		// A signing key on disk (or a v2+ schema) means this install
+		// signs its manifest: an unsigned one is a stripped signature,
+		// i.e. a downgrade attack on edited hashes. Hard failure.
+		if _, kerr := os.Stat(PublicKeyPath()); kerr == nil || m.Version >= 2 {
+			st.OK = false
+			st.Failures = append(st.Failures, Failure{
+				Code:   CodeSignatureMissing,
+				Path:   paths.ManifestPath(),
+				Detail: "manifest signature removed (signing key present or schema v2+) — re-run watchdog-shim install",
+			})
+			return
+		}
+		// Legacy v1 manifest from before signing existed. Soft
+		// failure so old installs keep working; re-running install
+		// upgrades them.
 		st.Failures = append(st.Failures, Failure{
 			Code:   CodeSignatureMissing,
 			Path:   paths.ManifestPath(),

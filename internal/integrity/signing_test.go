@@ -113,6 +113,58 @@ func TestManifestSignature_RejectsDeletedPubKey(t *testing.T) {
 	}
 }
 
+// Stripping the signature (to hide edited hashes) must not downgrade
+// to the lenient legacy path once the install signs manifests.
+func TestManifestSignature_StrippedSignatureIsHard(t *testing.T) {
+	_, shimDir := withTempWatchdogDir(t)
+	writeFakeShim(t, shimDir, "npm", "v1\n")
+	m, _ := Build()
+	if err := WriteManifest(m); err != nil {
+		t.Fatal(err)
+	}
+	raw, err := os.ReadFile(manifestPathForTest())
+	if err != nil {
+		t.Fatal(err)
+	}
+	var cfg map[string]any
+	_ = json.Unmarshal(raw, &cfg)
+	delete(cfg, "signature")
+	if shims, ok := cfg["shims"].(map[string]any); ok {
+		shims["npm"] = "0000000000000000000000000000000000000000000000000000000000000000"
+	}
+	out, _ := json.MarshalIndent(cfg, "", "  ")
+	if err := os.WriteFile(manifestPathForTest(), out, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	ResetCache()
+	st := Verify()
+	if st.OK || !st.HasFailure(CodeSignatureMissing) {
+		t.Errorf("stripped signature must fail hard; OK=%v failures=%v", st.OK, st.Failures)
+	}
+}
+
+// Deleting the manifest after install must not fall back to the
+// lenient ManifestMissing path that hooks ignore.
+func TestVerify_ManifestRemovedAfterInstallIsHard(t *testing.T) {
+	_, shimDir := withTempWatchdogDir(t)
+	writeFakeShim(t, shimDir, "npm", "v1\n")
+	m, _ := Build()
+	if err := WriteManifest(m); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(manifestPathForTest()); err != nil {
+		t.Fatal(err)
+	}
+	ResetCache()
+	st := Verify()
+	if st.ManifestMissing {
+		t.Error("ManifestMissing set; hooks would skip enforcement")
+	}
+	if st.OK || !st.HasFailure(CodeManifestRemoved) {
+		t.Errorf("want hard MANIFEST_REMOVED, got OK=%v %v", st.OK, st.Failures)
+	}
+}
+
 // manifestPathForTest avoids importing the paths package here just
 // to call ManifestPath; manifest_test.go shares this style.
 func manifestPathForTest() string {
