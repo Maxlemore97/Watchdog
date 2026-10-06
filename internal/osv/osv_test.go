@@ -319,6 +319,30 @@ func TestQuery_LiveMalformedJSONReturnsError(t *testing.T) {
 	}
 }
 
+// A 429/5xx with a JSON body must not read as "no vulns" — and must
+// not poison the cache with a clean result.
+func TestQuery_NonOKStatusReturnsErrorAndSkipsCache(t *testing.T) {
+	for _, status := range []int{http.StatusTooManyRequests, http.StatusInternalServerError, http.StatusServiceUnavailable} {
+		dir := t.TempDir()
+		t.Setenv("WATCHDOG_CACHE_DIR", dir)
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(status)
+			_, _ = w.Write([]byte(`{"code":8,"message":"quota exceeded"}`))
+		}))
+		t.Setenv("WATCHDOG_OSV_ENDPOINT", srv.URL)
+
+		pkg := types.Package{Ecosystem: "npm", Name: "evil", Version: "1"}
+		got, err := Query(pkg)
+		srv.Close()
+		if err == nil {
+			t.Errorf("status %d: expected error, got vulns=%v", status, got)
+		}
+		if cached := CacheLoad(pkg); cached != nil {
+			t.Errorf("status %d: failure was cached as %v", status, cached)
+		}
+	}
+}
+
 func TestQuery_LiveServerClosedReturnsError(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("WATCHDOG_CACHE_DIR", dir)

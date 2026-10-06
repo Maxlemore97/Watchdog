@@ -182,6 +182,18 @@ func Query(pkg types.Package) ([]map[string]any, error) {
 		return nil, err
 	}
 	defer resp.Body.Close()
+	// A rate-limit or server error usually carries a JSON body without
+	// a `vulns` key. Decoding it would read as "no vulnerabilities" and
+	// get cached as clean, so any non-200 is a query failure and the
+	// caller's fail-closed policy applies.
+	if resp.StatusCode != http.StatusOK {
+		err := fmt.Errorf("osv: unexpected HTTP status %d", resp.StatusCode)
+		log.Event("osv_query_failed", map[string]any{
+			"package": pkg.Ecosystem + ":" + pkg.Name,
+			"error":   err.Error(),
+		})
+		return nil, err
+	}
 	raw, err := io.ReadAll(io.LimitReader(resp.Body, 5_000_000))
 	if err != nil {
 		log.Event("osv_query_failed", map[string]any{
@@ -394,6 +406,9 @@ func jsonGet(rawURL string) map[string]any {
 		return map[string]any{}
 	}
 	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return map[string]any{}
+	}
 	raw, err := io.ReadAll(io.LimitReader(resp.Body, 5_000_000))
 	if err != nil {
 		return map[string]any{}
