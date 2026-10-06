@@ -74,14 +74,16 @@ func main() {
 	}
 	var findings []ledger.ScanResult
 	var skipped int
-	ledger.WithLock(func() {
-		l := ledger.Load()
-		var dirty bool
-		findings, dirty, skipped = ledger.Scan(plugins, &l, analyzer.AnalyzeLocalPlugin, 0)
-		if dirty {
-			ledger.Save(l)
-		}
-	})
+	// Scan against a snapshot without holding the ledger lock: LLM
+	// scans can take minutes, longer than the lock's stale threshold,
+	// so a concurrent session would otherwise break a live lock.
+	// Commit merges the results under a short lock.
+	l := ledger.Load()
+	var dirty bool
+	findings, dirty, skipped = ledger.Scan(plugins, &l, analyzer.AnalyzeLocalPlugin, 0)
+	if dirty {
+		ledger.Commit(l)
+	}
 	if len(findings) == 0 {
 		return
 	}
