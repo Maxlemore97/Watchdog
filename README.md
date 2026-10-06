@@ -284,7 +284,7 @@ watchdog-scan project . --plugins-only   # skip the dependency walk
 watchdog-scan project . --packages-only  # skip the plugin/skill walk
 ```
 
-Lockfiles parsed: `package-lock.json`, `pnpm-lock.yaml`, `Pipfile.lock`, `poetry.lock`, `uv.lock`, `Cargo.lock`, `Gemfile.lock`, `composer.lock`, `go.mod`, `packages.lock.json`. Bare manifests without a lockfile are skipped (pinned versions only) and surfaced as a note. Plugin roots detected: any directory holding `.claude-plugin/`, `skills/`, `commands/`, `hooks/`, or a top-level `plugin.json`. Standalone `CLAUDE.md` / `agents.md` files are listed in the report. Exit code follows the worst verdict (0 for `allow`, 1 for `ask` / `deny`).
+Lockfiles parsed: `package-lock.json`, `pnpm-lock.yaml`, `Pipfile.lock`, `poetry.lock`, `uv.lock`, `Cargo.lock`, `Gemfile.lock`, `composer.lock`, `go.mod`, `packages.lock.json`. Bare manifests without a lockfile are skipped (pinned versions only) and surfaced as a note. Plugin roots detected: any directory holding `.claude-plugin/`, `skills/`, `commands/`, `hooks/`, or a top-level `plugin.json`. The **agent surface** is checked deterministically (no LLM): instruction files and rules of every major agent (`CLAUDE.md`, `AGENTS.md`, `GEMINI.md`, `.cursor/rules/`, `.windsurf/rules/`, `.clinerules`, Copilot instructions, `.claude/{commands,agents,skills}/`) for hidden Unicode (tag characters, bidi controls, zero-width runs); `.claude/settings*.json` for hooks, `enableAllProjectMcpServers`, `bypassPermissions` and unrestricted Bash; `.vscode/tasks.json` for tasks that run on folder open; project MCP configs for unpinned servers, plain-HTTP remotes and literal credentials. The SessionStart hook runs the same check on the session's working directory and tells the agent about findings. Exit code follows the worst verdict (0 for `allow`, 1 for `ask` / `deny`).
 
 ### Scan locally installed Claude Code plugins
 
@@ -297,6 +297,16 @@ watchdog-scan local --root /some/other/dir   # repeatable: append extra root(s)
 ```
 
 In Claude Code, the same scan is exposed as the `/watchdog-scan-local` slash command (auto-discovered from `commands/watchdog-scan-local.md`).
+
+### Audit configured MCP servers
+
+`watchdog-scan mcp` reads the user-level MCP configs of every supported host (Claude Desktop, Cursor, Continue, Cline, Zed, VS Code, Windsurf, Gemini CLI, Codex, OpenCode, and Claude Code's `~/.claude.json` including per-project servers) and reports, per server: unpinned package runners (`npx -y pkg`, `uvx pkg`, `@latest` — every launch may pull a new release), plain-HTTP remotes, literal credentials, and an OSV preflight of the package it launches (malicious-package advisories deny).
+
+```bash
+watchdog-scan mcp --format=text     # OSV only, no LLM cost
+watchdog-scan mcp --deep            # also run the LLM analyzer on launched packages
+watchdog-scan mcp --config ./x.json # audit a specific file (repeatable)
+```
 
 ---
 
