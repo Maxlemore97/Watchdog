@@ -259,9 +259,9 @@ func hookCommands(v any) []string {
 func checkVSCodeTasks(rel string, data []byte) []AgentSurfaceFinding {
 	var cfg struct {
 		Tasks []struct {
-			Label      string   `json:"label"`
-			Command    string   `json:"command"`
-			Args       []any    `json:"args"`
+			Label      string `json:"label"`
+			Command    string `json:"command"`
+			Args       []any  `json:"args"`
 			RunOptions struct {
 				RunOn string `json:"runOn"`
 			} `json:"runOptions"`

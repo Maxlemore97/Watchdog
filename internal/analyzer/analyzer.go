@@ -80,6 +80,11 @@ var hostilePatterns = []hostilePattern{
 	{regexp.MustCompile(`\bxox[bpoa]-[A-Za-z0-9-]{10,}`), "Slack token shape"},
 	{regexp.MustCompile(`(printenv|env)\s*\|\s*(curl|wget|nc)\b`), "env piped to network sink"},
 	{regexp.MustCompile(`curl\s+[^|;&]*\|\s*(bash|sh|zsh)\b`), "curl piped to shell"},
+	// An install script driving the victim's own AI agent with its
+	// safety switches off (s1ngularity/Nx, 2025).
+	{regexp.MustCompile(`\b(claude|gemini|codex|q|cursor-agent|copilot)\b[^\n]{0,200}` +
+		`(--dangerously-skip-permissions|--dangerously-bypass-approvals-and-sandbox|--yolo|--trust-all-tools|--allow-all-tools)`),
+		"AI agent CLI invoked with permissions disabled"},
 }
 
 // isDocPath classifies README-like files. Doc files routinely
