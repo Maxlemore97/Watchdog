@@ -57,12 +57,12 @@ type Options struct {
 
 // Result is what every adapter renders.
 type Result struct {
-	Mode     string             `json:"mode"`
-	Packages []map[string]any   `json:"packages"`
-	Notes    []string           `json:"notes"`
-	Verdict  string             `json:"verdict"`
-	Reason   string             `json:"reason"`
-	Findings []map[string]any   `json:"findings"`
+	Mode     string           `json:"mode"`
+	Packages []map[string]any `json:"packages"`
+	Notes    []string         `json:"notes"`
+	Verdict  string           `json:"verdict"`
+	Reason   string           `json:"reason"`
+	Findings []map[string]any `json:"findings"`
 }
 
 // Packages runs OSV + LLM analysis on a list of already-parsed
@@ -136,7 +136,17 @@ func Packages(pkgs []types.Package, notes []string, opts Options) Result {
 		return base
 	}
 
+	// Notes describe install inputs Watchdog could not vet (URLs,
+	// requirements files, custom registries, runtime-supplied args).
+	// Clean scanned packages say nothing about those, so a note always
+	// lifts an otherwise-clean result to `ask`.
 	if len(decisions) == 0 {
+		if len(notes) > 0 {
+			base.Verdict = "ask"
+			base.Reason = "scanned packages clean, but unvetted install input: " + joinSemi(notes)
+			base.Findings = findings
+			return base
+		}
 		base.Verdict = "allow"
 		base.Reason = fmt.Sprintf("clean (mode=%s, threshold=%s)", mode, osv.MinSeverity())
 		base.Findings = findings
@@ -159,6 +169,9 @@ func Packages(pkgs []types.Package, notes []string, opts Options) Result {
 	}
 	reason := joinSemi(relevant)
 	if worst == "allow" && len(notes) > 0 {
+		worst = "ask"
+		reason = "scanned packages clean, but unvetted install input: " + joinSemi(notes)
+	} else if len(notes) > 0 {
 		reason += "; also: " + joinSemi(notes)
 	}
 	log.Event("preflight_packages", map[string]any{
