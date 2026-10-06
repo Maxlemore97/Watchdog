@@ -184,6 +184,11 @@ var ErrExpired = errors.New("cached decision expired")
 // failing reads.
 var ErrUnsignedToken = errors.New("cached decision has missing or invalid signature")
 
+// ErrCommandMismatch is returned when a signed token sits under the
+// key of a different command (a token copied or renamed onto another
+// command's cache slot). The token is deleted.
+var ErrCommandMismatch = errors.New("cached decision was issued for a different command")
+
 // Read looks up a cached decision for command. Returns the token on
 // hit, ErrNoDecision when absent, ErrExpired when stale. Any other
 // I/O error means "no useful cache" — caller should fall back to
@@ -234,6 +239,18 @@ func Read(command string) (*Token, error) {
 			"reason": err.Error(),
 		})
 		return nil, ErrUnsignedToken
+	}
+
+	// Bind the token to the command it was issued for. The filename
+	// is only a hash of the command, so a validly signed allow token
+	// for `npm i lodash` copied to the key of `npm i evil` would
+	// otherwise be honoured. Command is covered by the signature.
+	if canonicalize(t.Command) != canonicalize(command) {
+		_ = os.Remove(path)
+		audit.Record("decision.mismatch", map[string]any{
+			"key": key,
+		})
+		return nil, ErrCommandMismatch
 	}
 
 	audit.Record("decision.consumed", map[string]any{
