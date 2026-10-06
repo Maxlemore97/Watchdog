@@ -16,6 +16,12 @@ import (
 // exceed the longest reasonable downstream call.
 const DefaultHandlerTimeout = 60 * time.Second
 
+// MaxInFlight caps concurrently running handler bodies, including
+// ones Guard already gave up on after a timeout.
+const MaxInFlight = 4
+
+var workerSlots = make(chan struct{}, MaxInFlight)
+
 // HandlerTimeout returns the configured per-tool deadline. Override
 // via WATCHDOG_MCP_HANDLER_TIMEOUT (in seconds, decimal allowed).
 func HandlerTimeout() time.Duration {
@@ -58,7 +64,18 @@ func Guard(ctx context.Context, name string, fn func(ctx context.Context) (any, 
 	}
 	done := make(chan outcome, 1)
 
+	// Bound in-flight work. A worker that outlives its timeout keeps
+	// its slot until fn really returns, so a flood of slow calls
+	// cannot pile up unbounded LLM subprocesses in a long-lived daemon.
+	select {
+	case workerSlots <- struct{}{}:
+	case <-ctx.Done():
+		audit.Record("mcp.tool.busy", map[string]any{"tool": name})
+		return nil, fmt.Errorf("watchdog: %s: server busy (%d calls in flight)", name, cap(workerSlots))
+	}
+
 	go func() {
+		defer func() { <-workerSlots }()
 		defer func() {
 			if r := recover(); r != nil {
 				audit.Record("mcp.tool.panic", map[string]any{

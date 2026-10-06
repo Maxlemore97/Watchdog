@@ -19,14 +19,21 @@ package main
 
 import (
 	"context"
+	"crypto/rand"
+	"crypto/subtle"
+	"encoding/hex"
+	"errors"
 	"flag"
 	"fmt"
 	"net"
 	"net/http"
 	"net/url"
 	"os"
+	"os/signal"
 	"path/filepath"
 	"strings"
+	"syscall"
+	"time"
 
 	"github.com/Maxlemore97/watchdog/internal/audit"
 	"github.com/Maxlemore97/watchdog/internal/config"
@@ -154,13 +161,18 @@ func main() {
 // Streamable HTTP (POST + SSE) on the `/mcp` path. Supports two
 // transports:
 //
-//   - unix://PATH — AF_UNIX socket. Filesystem perms (0600) act as
-//     authentication; only the owning user can connect.
-//   - tcp://HOST:PORT — Non-loopback hosts are refused to avoid
-//     accidentally exposing watchdog-mcp to the network. Token-based
-//     auth for TCP is a follow-up.
+//   - unix://PATH — AF_UNIX socket. Filesystem perms (0600, created
+//     under a 0077 umask) act as authentication; only the owning user
+//     can connect.
+//   - tcp://HOST:PORT — loopback only. Loopback TCP is reachable by
+//     every local user and by browsers, so every request must carry
+//     `Authorization: Bearer <token>` with the token from
+//     $WATCHDOG_DIR/daemon.token (0600, created on first start).
+//     mcp-go additionally rejects non-loopback Host headers (DNS
+//     rebinding).
 //
-// "auto" expands to unix://$WATCHDOG_DIR/mcp.sock.
+// "auto" expands to unix://$WATCHDOG_DIR/mcp.sock. SIGINT/SIGTERM
+// shut the server down gracefully and remove the socket.
 func serveDaemon(s *server.MCPServer, addr string) error {
 	listener, displayAddr, err := buildDaemonListener(addr)
 	if err != nil {
@@ -172,17 +184,97 @@ func serveDaemon(s *server.MCPServer, addr string) error {
 	mux.Handle("/mcp", httpServer)
 	mux.Handle("/mcp/", httpServer)
 
-	srv := &http.Server{Handler: mux}
+	var handler http.Handler = mux
+	if strings.HasPrefix(displayAddr, "tcp://") {
+		token, err := loadOrCreateDaemonToken()
+		if err != nil {
+			_ = listener.Close()
+			return fmt.Errorf("daemon token: %w", err)
+		}
+		handler = requireBearer(token, mux)
+	}
+
+	srv := &http.Server{
+		Handler: handler,
+		// Slowloris guard; streaming responses (SSE) are unaffected
+		// because only the header read is bounded.
+		ReadHeaderTimeout: 10 * time.Second,
+		IdleTimeout:       2 * time.Minute,
+	}
 
 	audit.Record("daemon.start", map[string]any{
 		"addr": displayAddr,
 	})
 	fmt.Fprintf(os.Stderr, "watchdog-mcp daemon: listening on %s\n", displayAddr)
 
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	go func() {
+		<-ctx.Done()
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		_ = srv.Shutdown(shutdownCtx)
+	}()
+
 	defer func() {
+		if sock, ok := strings.CutPrefix(displayAddr, "unix://"); ok {
+			_ = os.Remove(sock)
+		}
 		audit.Record("daemon.stop", map[string]any{"addr": displayAddr})
 	}()
-	return srv.Serve(listener)
+	if err := srv.Serve(listener); err != nil && !errors.Is(err, http.ErrServerClosed) {
+		return err
+	}
+	return nil
+}
+
+// daemonTokenPath is where the TCP bearer token lives.
+func daemonTokenPath() string {
+	return filepath.Join(paths.WatchdogDir(), "daemon.token")
+}
+
+// loadOrCreateDaemonToken returns the persisted TCP bearer token,
+// generating a 256-bit one (mode 0600) on first use.
+func loadOrCreateDaemonToken() (string, error) {
+	p := daemonTokenPath()
+	if data, err := os.ReadFile(p); err == nil {
+		if tok := strings.TrimSpace(string(data)); len(tok) >= 32 {
+			return tok, nil
+		}
+	}
+	buf := make([]byte, 32)
+	if _, err := rand.Read(buf); err != nil {
+		return "", err
+	}
+	tok := hex.EncodeToString(buf)
+	if err := os.MkdirAll(filepath.Dir(p), 0o700); err != nil {
+		return "", err
+	}
+	if err := os.WriteFile(p, []byte(tok+"\n"), 0o600); err != nil {
+		return "", err
+	}
+	return tok, nil
+}
+
+// requireBearer rejects requests without the expected bearer token
+// and any request carrying a browser Origin header (MCP clients are
+// not browsers).
+func requireBearer(token string, next http.Handler) http.Handler {
+	want := []byte("Bearer " + token)
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Origin") != "" {
+			http.Error(w, "Forbidden: browser origin", http.StatusForbidden)
+			return
+		}
+		got := []byte(r.Header.Get("Authorization"))
+		if subtle.ConstantTimeCompare(got, want) != 1 {
+			audit.Record("daemon.auth_failed", map[string]any{"remote": r.RemoteAddr})
+			w.Header().Set("WWW-Authenticate", `Bearer realm="watchdog-mcp"`)
+			http.Error(w, "Unauthorized", http.StatusUnauthorized)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
 }
 
 // buildDaemonListener parses addr and returns a net.Listener plus a
@@ -200,10 +292,12 @@ func buildDaemonListener(addr string) (net.Listener, string, error) {
 		// Remove a leftover socket from a previous run; Listen would
 		// otherwise fail with EADDRINUSE.
 		_ = os.Remove(sockPath)
-		if err := os.MkdirAll(filepath.Dir(sockPath), 0o755); err != nil {
+		if err := os.MkdirAll(filepath.Dir(sockPath), 0o700); err != nil {
 			return nil, "", fmt.Errorf("mkdir for socket: %w", err)
 		}
-		l, err := net.Listen("unix", sockPath)
+		// Create the socket under a 0077 umask so it is never
+		// connectable by others, not even between Listen and Chmod.
+		l, err := listenUnixPrivate(sockPath)
 		if err != nil {
 			return nil, "", fmt.Errorf("listen unix %s: %w", sockPath, err)
 		}

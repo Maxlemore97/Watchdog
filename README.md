@@ -457,7 +457,13 @@ watchdog-shim daemon status
 watchdog-shim daemon uninstall
 ```
 
-`--listen=auto` resolves to `unix://$WATCHDOG_DIR/mcp.sock` with mode `0600`. You can pass `tcp://127.0.0.1:PORT` instead (non-loopback hosts are refused); TCP auth is a follow-up.
+`--listen=auto` resolves to `unix://$WATCHDOG_DIR/mcp.sock` with mode `0600`. You can pass `tcp://127.0.0.1:PORT` instead (non-loopback hosts are refused). Loopback TCP is reachable by every local user and by browsers, so TCP mode requires `Authorization: Bearer <token>` on every request; the token is generated on first start at `$WATCHDOG_DIR/daemon.token` (mode `0600`). Requests with a browser `Origin` header or a non-loopback `Host` header (DNS rebinding) are rejected.
+
+```bash
+curl -H "Authorization: Bearer $(cat ~/.watchdog/daemon.token)" http://127.0.0.1:7274/mcp …
+```
+
+The daemon shuts down cleanly on SIGINT/SIGTERM and runs at most 4 tool calls at once; calls beyond that fail fast with "server busy".
 
 Daemon mode is mainly useful for hosts that natively speak HTTP/SSE MCP. Hosts that only spawn stdio children (Claude Desktop, Cursor today) keep using the existing stdio registration. A stdio↔HTTP proxy that bridges the two is planned.
 
