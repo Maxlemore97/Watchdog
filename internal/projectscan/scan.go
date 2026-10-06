@@ -53,9 +53,12 @@ type Result struct {
 	Packages  PackagesResult `json:"packages"`
 	Plugins   PluginsResult  `json:"plugins"`
 	AgentDocs []string       `json:"agent_docs,omitempty"`
-	Notes     []string       `json:"notes,omitempty"`
-	Verdict   string         `json:"verdict"`
-	ElapsedMs int64          `json:"elapsed_ms"`
+	// AgentSurface covers instruction files, rules, project hooks,
+	// auto-run tasks and project MCP configs (deterministic checks).
+	AgentSurface *AgentSurfaceResult `json:"agent_surface,omitempty"`
+	Notes        []string            `json:"notes,omitempty"`
+	Verdict      string              `json:"verdict"`
+	ElapsedMs    int64               `json:"elapsed_ms"`
 }
 
 // Run executes a project scan end-to-end.
@@ -76,6 +79,8 @@ func Run(opts ScanOpts) (*Result, error) {
 	}
 	if !opts.PackagesOnly {
 		r.Plugins = scanPlugins(disc.PluginRoots)
+		as := ScanAgentSurface(opts.Root, opts.MaxDepth)
+		r.AgentSurface = &as
 	}
 
 	// Drop empty sub-verdicts (phase skipped via --packages-only /
@@ -87,6 +92,9 @@ func Run(opts ScanOpts) (*Result, error) {
 	}
 	if r.Plugins.Verdict != "" {
 		agg = append(agg, r.Plugins.Verdict)
+	}
+	if r.AgentSurface != nil {
+		agg = append(agg, r.AgentSurface.Verdict)
 	}
 	if len(agg) == 0 {
 		r.Verdict = "allow"
