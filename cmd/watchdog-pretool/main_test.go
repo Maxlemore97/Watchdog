@@ -9,6 +9,8 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+
+	"github.com/Maxlemore97/watchdog/internal/testenv"
 )
 
 // buildBinary compiles watchdog-pretool into a tmpdir and returns its
@@ -35,7 +37,7 @@ func runBinary(t *testing.T, bin, stdin string, env ...string) string {
 	t.Helper()
 	cmd := exec.Command(bin)
 	cmd.Stdin = strings.NewReader(stdin)
-	cmd.Env = append(os.Environ(), env...)
+	cmd.Env = testenv.Hermetic(t, env...)
 	var stdout bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = os.Stderr

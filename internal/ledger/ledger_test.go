@@ -162,8 +162,9 @@ func TestDiscover_InstalledPluginsJSON_SkipsStaleAndSelf(t *testing.T) {
 func TestContentHash_StableForIdenticalFiles(t *testing.T) {
 	tmp := t.TempDir()
 	p := makePlugin(t, tmp, "alpha", "0.1", false)
-	if ContentHash(p) != ContentHash(p) {
-		t.Error("hash not stable")
+	h1, h2 := ContentHash(p), ContentHash(p)
+	if h1 == "" || h1 != h2 {
+		t.Errorf("hash not stable: %q vs %q", h1, h2)
 	}
 }
 

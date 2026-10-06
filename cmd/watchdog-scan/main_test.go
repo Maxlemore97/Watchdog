@@ -9,6 +9,8 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+
+	"github.com/Maxlemore97/watchdog/internal/testenv"
 )
 
 func buildBinary(t *testing.T) string {
@@ -33,7 +35,7 @@ func runBinary(t *testing.T, bin, target string, env ...string) string {
 		args = append(args, target)
 	}
 	cmd := exec.Command(bin, args...)
-	cmd.Env = append(os.Environ(), env...)
+	cmd.Env = testenv.Hermetic(t, env...)
 	var stdout bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = os.Stderr

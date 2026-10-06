@@ -38,8 +38,10 @@ if [ -z "$prompt" ]; then
 fi
 
 if printf '%s' "$prompt" | grep -qiE '/plugin[[:space:]]+(install|marketplace[[:space:]]+add)[[:space:]]+\S'; then
+  # UserPromptSubmit only honours "decision":"block"; any other value
+  # is ignored and the prompt goes through (fail-open).
   # shellcheck disable=SC2016  # backticks are literal markdown in JSON message
-  printf '%s\n' '{"decision":"deny","reason":"watchdog: prompt binary missing but manifest present — tamper suspected. Run `watchdog-shim doctor` to investigate."}'
+  printf '%s\n' '{"decision":"block","reason":"watchdog: prompt binary missing but manifest present — tamper suspected. Run `watchdog-shim doctor` to investigate."}'
 
   audit_log="${WATCHDOG_AUDIT_LOG:-${WATCHDOG_DIR:-$HOME/.watchdog}/audit.jsonl}"
   audit_dir=$(dirname -- "$audit_log")

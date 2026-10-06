@@ -25,13 +25,6 @@ import (
 
 var gitURLRE = regexp.MustCompile(`^(https?://|git@|ssh://).+`)
 
-type resultEntry struct {
-	Ecosystem string         `json:"ecosystem"`
-	Name      string         `json:"name"`
-	Version   string         `json:"version,omitempty"`
-	Verdict   map[string]any `json:"-"`
-}
-
 func main() {
 	if version.HandleFlag(os.Args[0], os.Args[1:], os.Stdout) {
 		return
@@ -220,5 +213,5 @@ func runLocal(args []string) int {
 // stringList implements flag.Value so --root can be repeated.
 type stringList []string
 
-func (s *stringList) String() string         { return strings.Join(*s, ",") }
-func (s *stringList) Set(v string) error     { *s = append(*s, v); return nil }
+func (s *stringList) String() string     { return strings.Join(*s, ",") }
+func (s *stringList) Set(v string) error { *s = append(*s, v); return nil }

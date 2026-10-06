@@ -13,6 +13,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/Maxlemore97/watchdog/internal/testenv"
 )
 
 func buildBinary(t *testing.T) string {
@@ -51,7 +53,7 @@ exit 0
 func runShim(t *testing.T, bin string, args []string, env ...string) (string, string, int) {
 	t.Helper()
 	cmd := exec.Command(bin, args...)
-	cmd.Env = append(os.Environ(), env...)
+	cmd.Env = testenv.Hermetic(t, env...)
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
