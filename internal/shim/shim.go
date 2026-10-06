@@ -96,20 +96,47 @@ func DefaultShimDir() string {
 	return filepath.Join(home, ".watchdog", "bin")
 }
 
+// ResolveShimDir returns the active shim dir: WATCHDOG_SHIM_DIR when
+// set, DefaultShimDir otherwise.
+func ResolveShimDir() string {
+	if v := os.Getenv("WATCHDOG_SHIM_DIR"); v != "" {
+		return v
+	}
+	return DefaultShimDir()
+}
+
 // PosixWrapperTemplate writes a tiny shell script that exec's the
-// watchdog-shim-exec binary with the tool name as first arg.
+// watchdog-shim-exec binary with the tool name as first arg. The exec
+// path and tool slots take already-quoted words (PosixQuote).
 const PosixWrapperTemplate = `#!/usr/bin/env bash
 # Watchdog shim for %s. Do not edit by hand; regenerate via
 # ` + "`" + `watchdog-shim install` + "`" + `.
-exec "%s" "%s" "$@"
+exec %s %s "$@"
 `
+
+// PosixQuote quotes s as one shell word. Plain paths keep the familiar
+// double-quoted form; anything with characters the shell would expand
+// inside double quotes ($, `, \, ", !) is single-quoted so an install
+// path can never inject code into the wrapper.
+func PosixQuote(s string) string {
+	if !strings.ContainsAny(s, "$`\\\"!") {
+		return `"` + s + `"`
+	}
+	return "'" + strings.ReplaceAll(s, "'", `'"'"'`) + "'"
+}
+
+// CmdQuote quotes s for a .cmd batch file: `%` would otherwise expand
+// as a variable reference.
+func CmdQuote(s string) string {
+	return `"` + strings.ReplaceAll(s, "%", "%%") + `"`
+}
 
 // WindowsWrapperTemplate is the .cmd counterpart. %s slots: tool
 // name comment, exec path, tool name.
 const WindowsWrapperTemplate = `@echo off
 :: Watchdog shim for %s. Do not edit by hand; regenerate via
 :: ` + "`" + `watchdog-shim install` + "`" + `.
-"%s" "%s" %%*
+%s %s %%*
 `
 
 // FindRealBinary walks PATH and returns the first executable named

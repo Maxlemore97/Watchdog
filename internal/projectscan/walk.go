@@ -37,28 +37,28 @@ var unsupportedLockfiles = map[string]bool{
 // deps (and a lockfile sits at the project root anyway); .git is
 // noise; build outputs are noise.
 var skipDirNames = map[string]bool{
-	"node_modules":       true,
-	"vendor":             true,
-	".git":               true,
-	".svn":               true,
-	".hg":                true,
-	"venv":               true,
-	".venv":              true,
-	"__pycache__":        true,
-	"target":             true, // cargo, gradle
-	"build":              true,
-	"dist":               true,
-	".tox":               true,
-	".pytest_cache":      true,
-	".mypy_cache":        true,
-	"bin":                true,
-	"obj":                true,
+	"node_modules":  true,
+	"vendor":        true,
+	".git":          true,
+	".svn":          true,
+	".hg":           true,
+	"venv":          true,
+	".venv":         true,
+	"__pycache__":   true,
+	"target":        true, // cargo, gradle
+	"build":         true,
+	"dist":          true,
+	".tox":          true,
+	".pytest_cache": true,
+	".mypy_cache":   true,
+	"bin":           true,
+	"obj":           true,
 }
 
 // WalkOpts controls discovery.
 type WalkOpts struct {
-	MaxDepth        int
-	SkipGitignored  bool // honor a top-level .gitignore (best-effort, prefix-match)
+	MaxDepth       int
+	SkipGitignored bool // honor a top-level .gitignore (best-effort, prefix-match)
 }
 
 // Discovery is the walker's output. LockfilePaths are absolute

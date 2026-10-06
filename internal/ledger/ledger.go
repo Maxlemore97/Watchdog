@@ -109,33 +109,32 @@ type LedgerEntry struct {
 	ScannedAt       int64  `json:"scanned_at"`
 }
 
-// WithLock serializes Load→modify→Save sequences across processes.
+// WithLock serializes short Load→merge→Save sequences across
+// processes. Keep fn fast: never run scans (LLM calls take minutes)
+// while holding the lock — scan against a snapshot and commit the
+// results with Commit instead.
 //
-// Two SessionStart hooks running concurrently (e.g. multiple Claude
-// Code windows opened at once) would otherwise both Load the same
-// snapshot, both modify independently, and the second Save would
-// drop the first's scan results. The lock file is best-effort: a
-// stale lock older than staleLockSecs is forcibly broken so a
-// crashed sibling cannot wedge the ledger forever.
-//
-// fn always runs — if the lock cannot be acquired after retries, we
-// fall back to unlocked execution (the worst case is the original
-// race, which is also the pre-lock behavior).
+// The lock file is best-effort: one older than staleLockSecs is
+// treated as left behind by a crashed process and broken. That is
+// only safe because holders never keep it for long. If the lock
+// cannot be acquired after retries, fn runs anyway; Save renames
+// atomically, so the worst case is a lost update (the plugin is
+// rescanned next session), never a torn file.
 func WithLock(fn func()) {
 	dir := paths.CacheDir()
-	if err := os.MkdirAll(dir, 0o755); err != nil {
+	if err := os.MkdirAll(dir, 0o700); err != nil {
 		fn()
 		return
 	}
 	lockPath := LedgerPath() + ".lock"
 	const (
-		maxAttempts    = 50
-		retryDelay     = 100 * time.Millisecond
-		staleLockSecs  = 60
+		maxAttempts   = 50
+		retryDelay    = 100 * time.Millisecond
+		staleLockSecs = 60
 	)
 	acquired := false
-	for i := 0; i < maxAttempts; i++ {
-		f, err := os.OpenFile(lockPath, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o644)
+	for range maxAttempts {
+		f, err := os.OpenFile(lockPath, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
 		if err == nil {
 			_ = f.Close()
 			acquired = true
@@ -153,6 +152,23 @@ func WithLock(fn func()) {
 		defer os.Remove(lockPath)
 	}
 	fn()
+}
+
+// Commit merges the entries of scanned into the on-disk ledger under
+// the lock and saves it. A concurrent session may have saved its own
+// results since scanned was loaded; reloading inside the lock keeps
+// them. For the same plugin the newer scan wins.
+func Commit(scanned Ledger) {
+	WithLock(func() {
+		cur := Load()
+		for name, e := range scanned.Entries {
+			if prev, ok := cur.Entries[name]; ok && prev.ScannedAt > e.ScannedAt {
+				continue
+			}
+			cur.Entries[name] = e
+		}
+		Save(cur)
+	})
 }
 
 func Load() Ledger {
@@ -173,7 +189,7 @@ func Load() Ledger {
 
 func Save(l Ledger) {
 	dir := paths.CacheDir()
-	if err := os.MkdirAll(dir, 0o755); err != nil {
+	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return
 	}
 	data, err := json.MarshalIndent(l, "", "  ")
@@ -184,7 +200,7 @@ func Save(l Ledger) {
 	// PID-suffixed tmp so parallel sessions writing the ledger don't
 	// tear each other's atomic-rename staging file.
 	tmp := path + "." + strconv.Itoa(os.Getpid()) + ".tmp"
-	if err := os.WriteFile(tmp, data, 0o644); err != nil {
+	if err := os.WriteFile(tmp, data, 0o600); err != nil {
 		log.Event("cache_write_failed", map[string]any{"path": path, "stage": "write_tmp", "error": err.Error()})
 		return
 	}

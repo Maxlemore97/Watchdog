@@ -89,3 +89,28 @@ func TestRead_RejectsTamperedToken(t *testing.T) {
 func nowISO() string {
 	return "2099-01-01T00:00:00Z"
 }
+
+// A validly signed token moved onto another command's cache slot must
+// not be honoured: the key is only a hash of the command.
+func TestRead_RejectsTokenCopiedToOtherCommand(t *testing.T) {
+	withTempDir(t)
+	Write("npm install lodash", "allow", "ok")
+	src := filepath.Join(Dir(), Key("npm install lodash")+".json")
+	dst := filepath.Join(Dir(), Key("npm install evil")+".json")
+	data, err := os.ReadFile(src)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(dst, data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Read("npm install evil"); !errors.Is(err, ErrCommandMismatch) {
+		t.Errorf("Read(copied token) = %v, want ErrCommandMismatch", err)
+	}
+	if _, err := os.Stat(dst); !os.IsNotExist(err) {
+		t.Error("mismatched token should be deleted")
+	}
+	if tok, err := Read("npm install lodash"); err != nil || tok.Verdict != "allow" {
+		t.Errorf("original token should still read: %v %v", tok, err)
+	}
+}

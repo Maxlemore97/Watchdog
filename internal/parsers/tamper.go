@@ -31,7 +31,22 @@ const (
 // strings, redirections, or subshells — we err on the side of
 // over-matching, since this is a security check.
 var (
-	settingsJSONRE = regexp.MustCompile(`\.claude/settings(\.local)?\.json`)
+	// settingsJSONRE matches user-level agent-host configs that
+	// register hooks or MCP servers: Claude Code, Claude Desktop,
+	// Cursor, Windsurf, Cline, Continue, Zed, VS Code, Gemini CLI,
+	// Codex. Project-level `.mcp.json` is excluded — editing it is a
+	// routine request and goes through the Edit/Write guard instead.
+	settingsJSONRE = regexp.MustCompile(`(?i)` +
+		`\.claude/settings(\.local)?\.json|\.claude\.json\b|claude_desktop_config\.json|` +
+		`\.cursor/mcp\.json|\.codeium/windsurf/mcp_config\.json|cline_mcp_settings\.json|` +
+		`\.continue/config\.(json|ya?ml)|zed/settings\.json|code/user/(settings|mcp)\.json|` +
+		`\.gemini/settings\.json|\.codex/config\.toml`)
+	interpreterWriteRE = regexp.MustCompile(`(?i)\bopen\([^)]*['"][wax]\+?b?['"]|` +
+		`\.write(_text|_bytes)?\(|\bwritefile(sync)?\b|\bappendfile(sync)?\b|` +
+		`\b(os|shutil)\.(remove|unlink|rename|replace|rmtree|move)\b|\.unlink\(|` +
+		`\bfs\.(rm|rmsync|unlinksync|unlink|renamesync|rename|copyfilesync|cpsync)\b|` +
+		`\bfile\.(write|delete)\b|\bfileutils\.|\bunlink\s*\(|` +
+		`set-content|out-file|remove-item|add-content`)
 	manifestPathRE = regexp.MustCompile(`(?:^|[/\s'"])\.watchdog/manifest\.json\b`)
 	// Watchdog process names: pkill / killall accept basenames.
 	watchdogProcRE = regexp.MustCompile(`\bwatchdog-(pretool|prompt|session|shim|shim-exec|mcp|scan|action)\b`)
@@ -78,7 +93,12 @@ func scan(cmd string, hits map[string]bool, depth int) {
 		hits[TamperManifestTamper] = true
 	}
 
-	// Token-level checks per shell-operator segment.
+	// Token-level checks per shell-operator segment. Here-document
+	// bodies are data unless a shell reads them (then: nested script).
+	cmd, bodies := splitHeredocs(cmd)
+	for _, b := range bodies {
+		scan(b, hits, depth+1)
+	}
 	for _, seg := range SplitOnOperators(cmd) {
 		tokens, err := Tokenize(strings.TrimSpace(seg))
 		if err != nil || len(tokens) == 0 {
@@ -114,22 +134,28 @@ func scanTokens(tokens []string, hits map[string]bool) {
 				}
 			}
 		}
-		// `PATH=...` — agent-context override of PATH is suspicious.
-		// Match either standalone `PATH=...` (an env-prefixed command,
-		// which only takes effect for that one command) or `export PATH=...`.
-		if strings.HasPrefix(tok, "PATH=") {
+	}
+	// `PATH=...` / `WATCHDOG_*=...` — only tokens in assignment
+	// position count: command prefixes (`PATH=x npm i`, `sudo
+	// WATCHDOG_DISABLE=1 …`, `env PATH=x …`) and arguments of the
+	// assignment builtins (`export PATH=…`, `declare -x WATCHDOG_X=…`).
+	// The same text as an ordinary argument (`grep 'PATH=' f`,
+	// `echo WATCHDOG_MODE=osv`) assigns nothing.
+	for _, a := range assignmentTokens(tokens) {
+		if strings.HasPrefix(a, "PATH=") {
 			hits[TamperPathOverride] = true
 		}
-		if tok == "export" && i+1 < len(tokens) && strings.HasPrefix(tokens[i+1], "PATH=") {
-			hits[TamperPathOverride] = true
-		}
-		// `WATCHDOG_DISABLE=1 …`, `export WATCHDOG_X=…`, `env
-		// WATCHDOG_X=… …`, `declare -x WATCHDOG_X=…`, and macOS
-		// `launchctl setenv WATCHDOG_X …`.
-		if watchdogEnvRE.MatchString(tok) {
+		if watchdogEnvRE.MatchString(a) {
 			hits[TamperWatchdogEnv] = true
 		}
-		if tok == "setenv" && i+1 < len(tokens) && strings.HasPrefix(tokens[i+1], "WATCHDOG_") {
+	}
+	// macOS `launchctl setenv WATCHDOG_X …` sets it for GUI apps.
+	if st := stripCommandPrefixes(tokens); len(st.tokens) > 2 &&
+		filepath.Base(st.tokens[0]) == "launchctl" && st.tokens[1] == "setenv" &&
+		(strings.HasPrefix(st.tokens[2], "WATCHDOG_") || st.tokens[2] == "PATH") {
+		if st.tokens[2] == "PATH" {
+			hits[TamperPathOverride] = true
+		} else {
 			hits[TamperWatchdogEnv] = true
 		}
 	}
@@ -184,6 +210,63 @@ func scanTokens(tokens []string, hits map[string]bool) {
 	}
 }
 
+// TamperWatchdogStateEdit: a file-editing tool (Edit/Write/…) targets
+// Watchdog's own state or shim directory.
+const TamperWatchdogStateEdit = "WATCHDOG_STATE_EDIT"
+
+// WritePathVerdict classifies a path that a file-editing agent tool
+// (Edit, Write, MultiEdit, NotebookEdit) is about to write. Those
+// tools never pass through the Bash checks, so this is the only gate
+// for them.
+//
+//   - Watchdog state or shim dir → "deny" (WATCHDOG_STATE_EDIT)
+//   - agent-host hook/MCP config (user-level settings, project
+//     .mcp.json, .claude/settings*.json) → "ask" (SETTINGS_JSON_EDIT):
+//     legitimate on request, but the user should see it happen
+//   - anything else → "" (no opinion)
+func WritePathVerdict(p, watchdogDir, shimDir string) (verdict, code string) {
+	if p == "" {
+		return "", ""
+	}
+	clean := filepath.Clean(p)
+	for _, dir := range []string{watchdogDir, shimDir} {
+		if dir == "" {
+			continue
+		}
+		d := filepath.Clean(dir)
+		if clean == d || strings.HasPrefix(clean, d+string(filepath.Separator)) {
+			return "deny", TamperWatchdogStateEdit
+		}
+	}
+	slash := filepath.ToSlash(clean)
+	if settingsJSONRE.MatchString(slash) || strings.EqualFold(filepath.Base(clean), ".mcp.json") {
+		return "ask", TamperSettingsJSONEdit
+	}
+	return "", ""
+}
+
+// assignmentBuiltins take NAME=value arguments that modify the
+// shell environment.
+var assignmentBuiltins = map[string]bool{
+	"export": true, "declare": true, "typeset": true, "local": true, "readonly": true,
+}
+
+// assignmentTokens returns the NAME=value tokens of a segment that
+// actually assign: prefix assignments (also after env/sudo/command
+// wrappers) and arguments of export/declare/typeset/local/readonly.
+func assignmentTokens(tokens []string) []string {
+	st := stripCommandPrefixes(tokens)
+	out := append([]string{}, st.envs...)
+	if len(st.tokens) > 0 && assignmentBuiltins[st.tokens[0]] {
+		for _, t := range st.tokens[1:] {
+			if envAssignRE.MatchString(t) {
+				out = append(out, t)
+			}
+		}
+	}
+	return out
+}
+
 // isWatchdogPath reports whether tok refers to ~/.watchdog or any
 // path beneath it. Accepts tilde-prefixed paths and absolute paths
 // under any user's home directory (since agents may resolve $HOME).
@@ -207,16 +290,30 @@ func hasWriteVerb(cmd string) bool {
 	if strings.Contains(cmd, ">") {
 		return true
 	}
+	// Inline interpreter code that writes or deletes files
+	// (`python3 -c "open(p,'w')…"`, `node -e "fs.rmSync(p)"`, a
+	// `python3 - <<EOF` heredoc). Reads stay allowed.
+	if interpreterWriteRE.MatchString(cmd) {
+		return true
+	}
 	// Token-level command names.
 	tokens, err := Tokenize(cmd)
 	if err != nil {
-		return false
+		// Unparseable: cannot rule a write out.
+		return true
 	}
 	for i, tok := range tokens {
 		head := filepath.Base(tok)
 		switch head {
-		case "rm", "mv", "cp", "tee", "ln":
+		case "rm", "mv", "cp", "tee", "ln", "dd", "truncate", "install", "rsync",
+			"sponge", "shred", "unlink", "touch", "chmod", "chown", "patch", "ed", "ex":
 			return true
+		case "perl", "ruby":
+			for _, rest := range tokens[i+1:] {
+				if strings.HasPrefix(rest, "-i") || strings.HasPrefix(rest, "-pi") {
+					return true
+				}
+			}
 		case "sed":
 			// Only flag in-place edits.
 			for _, rest := range tokens[i+1:] {

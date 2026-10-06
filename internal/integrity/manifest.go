@@ -213,7 +213,7 @@ func LoadManifest() (*Manifest, error) {
 // integrity check will report SIGNATURE_MISSING.
 func WriteManifest(m *Manifest) error {
 	dir := paths.WatchdogDir()
-	if err := os.MkdirAll(dir, 0o755); err != nil {
+	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return err
 	}
 
@@ -237,7 +237,7 @@ func WriteManifest(m *Manifest) error {
 	}
 	path := paths.ManifestPath()
 	tmp := path + "." + strconv.Itoa(os.Getpid()) + ".tmp"
-	if err := os.WriteFile(tmp, data, 0o644); err != nil {
+	if err := os.WriteFile(tmp, data, 0o600); err != nil {
 		return err
 	}
 	return os.Rename(tmp, path)

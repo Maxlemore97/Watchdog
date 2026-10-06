@@ -114,7 +114,7 @@ Installs all eight binaries under `$(go env GOPATH)/bin`. Make sure that's on yo
 
 ### D. Release tarball
 
-For air-gapped or locked-down machines. Grab the archive for your platform from [Releases](https://github.com/Maxlemore97/Watchdog/releases), check `checksums.txt`, extract, and copy the binaries somewhere on your PATH.
+For air-gapped or locked-down machines. Grab the archive for your platform from [Releases](https://github.com/Maxlemore97/Watchdog/releases), check `checksums.txt`, extract, and copy the binaries somewhere on your PATH. Releases carry signed SLSA build provenance; verify an archive with `gh attestation verify <archive> --repo Maxlemore97/Watchdog`. Unlike `checksums.txt`, which comes from the same place as the archives, the attestation proves the file was built by this repository's release workflow.
 
 ---
 
@@ -367,7 +367,8 @@ jq -c 'select(.event | startswith("integrity") or startswith("tamper"))' \
 
 - `SIGNATURE_INVALID` — manifest content changed without re-signing → hard fail, deny installs.
 - `SIGNATURE_KEY_MISSING` — manifest claims a signature but `~/.watchdog/.signing.pub` is gone → hard fail.
-- `SIGNATURE_MISSING` — legacy v1 manifest (pre-signing) → soft warning; next install upgrades it.
+- `SIGNATURE_MISSING` — legacy v1 manifest (pre-signing, no signing key on disk) → soft warning; next install upgrades it. An unsigned manifest next to an existing signing key (or with schema v2+) is a stripped signature → hard fail.
+- `MANIFEST_REMOVED` — manifest gone while the signing key or shim wrappers still exist → hard fail. Only a never-installed setup gets the lenient `MANIFEST_MISSING` path.
 
 Decision tokens follow the same pattern. Unsigned or invalid tokens are rejected (`ErrUnsignedToken`); the shim falls back to a fresh preflight. A filesystem-write attacker who also reads `~/.watchdog/.signing.key` can still forge signatures — local-key signing is *detection*, not prevention.
 
@@ -456,7 +457,13 @@ watchdog-shim daemon status
 watchdog-shim daemon uninstall
 ```
 
-`--listen=auto` resolves to `unix://$WATCHDOG_DIR/mcp.sock` with mode `0600`. You can pass `tcp://127.0.0.1:PORT` instead (non-loopback hosts are refused); TCP auth is a follow-up.
+`--listen=auto` resolves to `unix://$WATCHDOG_DIR/mcp.sock` with mode `0600`. You can pass `tcp://127.0.0.1:PORT` instead (non-loopback hosts are refused). Loopback TCP is reachable by every local user and by browsers, so TCP mode requires `Authorization: Bearer <token>` on every request; the token is generated on first start at `$WATCHDOG_DIR/daemon.token` (mode `0600`). Requests with a browser `Origin` header or a non-loopback `Host` header (DNS rebinding) are rejected.
+
+```bash
+curl -H "Authorization: Bearer $(cat ~/.watchdog/daemon.token)" http://127.0.0.1:7274/mcp …
+```
+
+The daemon shuts down cleanly on SIGINT/SIGTERM and runs at most 4 tool calls at once; calls beyond that fail fast with "server busy".
 
 Daemon mode is mainly useful for hosts that natively speak HTTP/SSE MCP. Hosts that only spawn stdio children (Claude Desktop, Cursor today) keep using the existing stdio registration. A stdio↔HTTP proxy that bridges the two is planned.
 

@@ -9,9 +9,12 @@
 package main
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 
@@ -20,7 +23,9 @@ import (
 	"github.com/Maxlemore97/watchdog/internal/integrity"
 	"github.com/Maxlemore97/watchdog/internal/osv"
 	"github.com/Maxlemore97/watchdog/internal/parsers"
+	"github.com/Maxlemore97/watchdog/internal/paths"
 	"github.com/Maxlemore97/watchdog/internal/preflight"
+	"github.com/Maxlemore97/watchdog/internal/shim"
 	"github.com/Maxlemore97/watchdog/internal/version"
 )
 
@@ -54,10 +59,64 @@ func hookBudgetSecs() float64 {
 }
 
 type hookPayload struct {
+	SessionID string `json:"session_id"`
 	ToolName  string `json:"tool_name"`
 	ToolInput struct {
-		Command string `json:"command"`
+		Command      string `json:"command"`
+		FilePath     string `json:"file_path"`
+		NotebookPath string `json:"notebook_path"`
 	} `json:"tool_input"`
+}
+
+// fileWriteTools write files without going through Bash, so neither
+// the tamper patterns nor the shim see them.
+var fileWriteTools = map[string]bool{
+	"Edit": true, "Write": true, "MultiEdit": true, "NotebookEdit": true,
+}
+
+// guardFileWrite applies parsers.WritePathVerdict to an Edit/Write
+// call. Returns true when it emitted a decision.
+func guardFileWrite(p hookPayload) bool {
+	target := p.ToolInput.FilePath
+	if target == "" {
+		target = p.ToolInput.NotebookPath
+	}
+	verdict, code := parsers.WritePathVerdict(target, paths.WatchdogDir(), shim.ResolveShimDir())
+	if verdict == "" {
+		return false
+	}
+	audit.Record("integrity."+verdict, map[string]any{
+		"tool":    p.ToolName,
+		"reason":  "protected_path_write",
+		"pattern": code,
+		"path":    truncate(target, 200),
+	})
+	switch verdict {
+	case "deny":
+		emit("deny", fmt.Sprintf("%s — %s may not modify Watchdog's own state (%s)", code, p.ToolName, target))
+	default:
+		emit("ask", fmt.Sprintf("%s — %s wants to modify an agent hook/MCP config (%s); confirm only if you asked for this", code, p.ToolName, target))
+	}
+	return true
+}
+
+// firstNoticeThisSession reports whether the degraded-integrity
+// notice has not yet been shown in this session, and records it. The
+// notice otherwise lands on every Bash call and costs context tokens
+// each turn. Without a session id it always returns true.
+func firstNoticeThisSession(sessionID string) bool {
+	if sessionID == "" {
+		return true
+	}
+	sum := sha256.Sum256([]byte(sessionID))
+	marker := filepath.Join(paths.CacheDir(), "notices", hex.EncodeToString(sum[:8]))
+	if _, err := os.Stat(marker); err == nil {
+		return false
+	}
+	if err := os.MkdirAll(filepath.Dir(marker), 0o700); err == nil {
+		_ = os.WriteFile(marker, nil, 0o600)
+	}
+	return true
 }
 
 type hookResponse struct {
@@ -93,10 +152,11 @@ func emitContext(text string) {
 
 // truncate returns at most n runes of s, suffixed with "…" if cut.
 func truncate(s string, n int) string {
-	if len(s) <= n {
+	r := []rune(s)
+	if len(r) <= n {
 		return s
 	}
-	return s[:n] + "…"
+	return string(r[:n]) + "…"
 }
 
 // isInstallShaped reports whether command parses as a package-manager
@@ -125,6 +185,10 @@ func main() {
 	var payload hookPayload
 	dec := json.NewDecoder(os.Stdin)
 	if err := dec.Decode(&payload); err != nil {
+		return
+	}
+	if fileWriteTools[payload.ToolName] {
+		guardFileWrite(payload)
 		return
 	}
 	if payload.ToolName != "Bash" {
@@ -173,10 +237,12 @@ func main() {
 			return
 		}
 		// Non-install Bash on a degraded install: surface the issue
-		// to the agent / user without blocking.
-		emitContext("integrity degraded (" + status.FirstReason() +
-			"); install commands will be denied until resolved. " +
-			"Run `watchdog-shim doctor`.")
+		// to the agent / user without blocking — once per session.
+		if firstNoticeThisSession(payload.SessionID) {
+			emitContext("integrity degraded (" + status.FirstReason() +
+				"); install commands will be denied until resolved. " +
+				"Run `watchdog-shim doctor`.")
+		}
 		return
 	}
 

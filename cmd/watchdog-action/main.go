@@ -1,11 +1,11 @@
 // watchdog-action: GitHub Action entry.
 //
-// 1. Compute changed files between PR base and HEAD via `git diff`.
-// 2. Filter to Claude plugin assets (.claude-plugin, skills/SKILL.md,
-//    commands/*.md, hooks/*).
-// 3. Group by plugin root and run AnalyzeLocalPlugin on each.
-// 4. Emit workflow annotations and exit non-zero if any verdict is at
-//    or above WATCHDOG_ACTION_FAIL_ON (default `deny`).
+//  1. Compute changed files between PR base and HEAD via `git diff`.
+//  2. Filter to Claude plugin assets (.claude-plugin, skills/SKILL.md,
+//     commands/*.md, hooks/*).
+//  3. Group by plugin root and run AnalyzeLocalPlugin on each.
+//  4. Emit workflow annotations and exit non-zero if any verdict is at
+//     or above WATCHDOG_ACTION_FAIL_ON (default `deny`).
 package main
 
 import (

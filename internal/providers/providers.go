@@ -194,6 +194,10 @@ func (b *boundedBuffer) Write(p []byte) (int, error) {
 
 func (b *boundedBuffer) String() string { return b.buf.String() }
 
+// waitDelay bounds how long runCmd waits for output pipes after the
+// provider process is done or killed. Var for tests.
+var waitDelay = 5 * time.Second
+
 const (
 	stderrCapBytes = 64 * 1024
 	// stdoutCapBytes must accommodate Claude's JSON envelope with
@@ -209,6 +213,10 @@ func runCmd(ctx context.Context, name string, args []string, stdin string) (stri
 	stderr := &boundedBuffer{limit: stderrCapBytes}
 	cmd.Stdout = stdout
 	cmd.Stderr = stderr
+	isolateProcessGroup(cmd)
+	// After the context fires (or the child exits), give stray pipe
+	// holders this long before Wait gives up and closes the pipes.
+	cmd.WaitDelay = waitDelay
 	if err := cmd.Run(); err != nil {
 		return "", fmt.Errorf("%s: %w (stderr: %s)", name, err, truncate(stderr.String(), 200))
 	}
@@ -224,7 +232,13 @@ func invokeClaude(prompt string, cfg Config) (string, error) {
 		"--model", cfg.Model,
 		"--output-format", "json",
 		"--max-turns", "1",
-		"--allowed-tools", "",
+		// The model reviews untrusted content: give it no tools at
+		// all (`--allowed-tools ""` only removed pre-approvals, so
+		// read-only tools stayed usable), load no MCP servers, and
+		// do not persist the session.
+		"--tools", "",
+		"--strict-mcp-config",
+		"--no-session-persistence",
 	}
 	if cfg.AppendSystem {
 		args = append(args, "--append-system-prompt", cfg.SystemPrompt)

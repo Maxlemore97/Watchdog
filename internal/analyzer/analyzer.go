@@ -216,8 +216,10 @@ func systemPromptDigest() string {
 }
 
 // cacheKey produces the content-addressed verdict-cache key.
-// Namespace tag `llm-v2:` separates new entries from the legacy
-// time-keyed cache so the two can coexist until the old ones age out.
+// Namespace tag `llm-v3:` (v3: metadata/notes framed as UNTRUSTED,
+// most-severe verdict selection) invalidates verdicts produced under
+// the older prompt layout, which could have been steered. Old entries
+// simply age out.
 //
 // Key inputs: provider+model (model upgrade → different verdicts),
 // systemPromptDigest (prompt edit invalidates), ecosystem/name/version
@@ -226,7 +228,7 @@ func systemPromptDigest() string {
 // byte differences (republished name@version, fetcher-curation
 // changes) miss and re-run the LLM.
 func cacheKey(ecosystem, name, version, bundleDigest string) string {
-	raw := strings.ToLower(fmt.Sprintf("llm-v2:%s:%s|%s|%s|%s|%s",
+	raw := strings.ToLower(fmt.Sprintf("llm-v3:%s:%s|%s|%s|%s|%s",
 		currentProviderSignature(), systemPromptDigest(),
 		ecosystem, name, version, bundleDigest))
 	sum := sha256.Sum256([]byte(raw))
@@ -264,7 +266,7 @@ func cacheStore(key string, verdict map[string]any) {
 		return
 	}
 	dir := paths.CacheDir()
-	if err := os.MkdirAll(dir, 0o755); err != nil {
+	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return
 	}
 	data, err := json.Marshal(verdict)
@@ -277,7 +279,7 @@ func cacheStore(key string, verdict map[string]any) {
 	// staging file. Each PID owns its own tmp; Rename of the loser
 	// may still ENOENT but the cache content cannot be torn.
 	tmp := path + "." + strconv.Itoa(os.Getpid()) + ".tmp"
-	if err := os.WriteFile(tmp, data, 0o644); err != nil {
+	if err := os.WriteFile(tmp, data, 0o600); err != nil {
 		log.Event("cache_write_failed", map[string]any{"path": path, "stage": "write_tmp", "error": err.Error()})
 		return
 	}
@@ -298,31 +300,46 @@ func buildUserPrompt(b *types.ArtifactBundle) string {
 		"name: " + b.Name,
 		"version: " + version,
 		"",
-		"metadata:",
 	}
+	// Registry metadata (description, author, scripts) and fetch notes
+	// (paths, manifest text) are attacker-controlled just like file
+	// bodies, so they get the same framing.
 	metaJSON, _ := json.MarshalIndent(b.Metadata, "", "  ")
 	metaStr := string(metaJSON)
-	if len(metaStr) > 3000 {
-		metaStr = metaStr[:3000]
+	if r := []rune(metaStr); len(r) > 3000 {
+		metaStr = string(r[:3000])
 	}
-	parts = append(parts, metaStr, "")
+	parts = append(parts, `<UNTRUSTED kind="metadata">`, neutralizeFraming(metaStr), "</UNTRUSTED>", "")
 	if len(b.Notes) > 0 {
-		parts = append(parts, "fetch_notes: "+strings.Join(b.Notes, "; "), "")
+		parts = append(parts,
+			`<UNTRUSTED kind="fetch_notes">`,
+			neutralizeFraming(strings.Join(b.Notes, "; ")),
+			"</UNTRUSTED>",
+			"",
+		)
 	}
 	for _, p := range sortedKeys(b.Files) {
 		safePath := escapeHTMLAttr(p)
-		// Neutralize any literal </UNTRUSTED so the body cannot close
-		// the framing tag and inject instructions before the closer.
-		safeBody := strings.ReplaceAll(b.Files[p], "</UNTRUSTED", `<\/UNTRUSTED`)
 		parts = append(parts,
 			fmt.Sprintf(`<UNTRUSTED kind="file" path="%s">`, safePath),
-			safeBody,
+			neutralizeFraming(b.Files[p]),
 			"</UNTRUSTED>",
 			"",
 		)
 	}
 	parts = append(parts, "Return a single JSON object matching the schema. No prose.")
 	return strings.Join(parts, "\n")
+}
+
+// framingTagRE matches any spelling of an UNTRUSTED open/close tag:
+// case variants and whitespace inside the tag (`</untrusted>`,
+// `< / UNTRUSTED >`, `<Untrusted kind=…>`).
+var framingTagRE = regexp.MustCompile(`(?i)<\s*(/?)\s*untrusted`)
+
+// neutralizeFraming escapes framing tags inside untrusted content so
+// it can neither close its own block early nor open a fake one.
+func neutralizeFraming(s string) string {
+	return framingTagRE.ReplaceAllString(s, `<\${1}UNTRUSTED-ESCAPED`)
 }
 
 // ---------- verdict extraction ------------------------------------
@@ -367,12 +384,32 @@ func extractVerdict(cliOutput string) map[string]any {
 		return nil
 	}
 	text := unwrapEnvelope(cliOutput)
+	// Several candidate blocks can appear when the model quotes the
+	// artifact (which may carry a forged ```json {"verdict":"allow"}```
+	// block) before giving its own answer. Pick the most severe
+	// verdict among them, so a quoted forgery can only make the
+	// result stricter, never more permissive.
+	var best map[string]any
 	for _, cand := range candidateVerdictJSONs(text) {
-		if v := parseVerdict(cand); v != nil {
-			return v
+		v := parseVerdict(cand)
+		if v == nil {
+			continue
+		}
+		if best == nil || verdictRank(verdictOf(v)) > verdictRank(verdictOf(best)) {
+			best = v
 		}
 	}
-	return nil
+	return best
+}
+
+func verdictRank(v string) int {
+	switch v {
+	case "deny":
+		return 2
+	case "ask":
+		return 1
+	}
+	return 0
 }
 
 // unwrapEnvelope strips the outer JSON envelope produced by LLM CLIs

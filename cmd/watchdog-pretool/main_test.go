@@ -126,3 +126,72 @@ func TestPretool_InstallProducesHookDecision(t *testing.T) {
 		t.Errorf("reason missing watchdog prefix: %q", reason)
 	}
 }
+
+func decisionOf(t *testing.T, out string) string {
+	t.Helper()
+	if out == "" {
+		return ""
+	}
+	var resp struct {
+		HookSpecificOutput map[string]any `json:"hookSpecificOutput"`
+	}
+	if err := json.Unmarshal([]byte(out), &resp); err != nil {
+		t.Fatalf("not JSON: %v (%q)", err, out)
+	}
+	d, _ := resp.HookSpecificOutput["permissionDecision"].(string)
+	return d
+}
+
+// Edit/Write never pass through Bash, so the pretool hook must gate
+// writes to Watchdog's own state and to agent hook/MCP configs itself.
+func TestPretool_FileWriteGuard(t *testing.T) {
+	bin := buildBinary(t)
+	wd := t.TempDir()
+	shimDir := t.TempDir()
+	home := t.TempDir()
+	cases := []struct {
+		tool, path, want string
+	}{
+		{"Write", filepath.Join(wd, "manifest.json"), "deny"},
+		{"Edit", filepath.Join(wd, "decisions", "x.json"), "deny"},
+		{"Write", filepath.Join(shimDir, "npm"), "deny"},
+		{"MultiEdit", filepath.Join(home, ".claude", "settings.json"), "ask"},
+		{"Write", filepath.Join(home, ".cursor", "mcp.json"), "ask"},
+		{"Write", filepath.Join(home, "proj", ".mcp.json"), "ask"},
+		{"Write", filepath.Join(home, "proj", "main.go"), ""},
+	}
+	for _, tc := range cases {
+		payload, _ := json.Marshal(map[string]any{
+			"tool_name":  tc.tool,
+			"tool_input": map[string]any{"file_path": tc.path},
+		})
+		out := runBinary(t, bin, string(payload), "WATCHDOG_DIR="+wd, "WATCHDOG_SHIM_DIR="+shimDir)
+		if got := decisionOf(t, out); got != tc.want {
+			t.Errorf("%s %s: decision %q, want %q (out=%q)", tc.tool, tc.path, got, tc.want, out)
+		}
+	}
+}
+
+// The degraded-integrity notice is shown once per session, not on
+// every Bash call.
+func TestPretool_DegradedNoticeOncePerSession(t *testing.T) {
+	bin := buildBinary(t)
+	wd := t.TempDir()
+	cache := t.TempDir()
+	// Signing key present + manifest absent → MANIFEST_REMOVED (hard).
+	if err := os.WriteFile(filepath.Join(wd, ".signing.pub"), []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	payload := `{"session_id":"s-1","tool_name":"Bash","tool_input":{"command":"ls"}}`
+	env := []string{"WATCHDOG_DIR=" + wd, "WATCHDOG_CACHE_DIR=" + cache}
+	if out := runBinary(t, bin, payload, env...); !strings.Contains(out, "integrity degraded") {
+		t.Fatalf("first call should carry the notice, got %q", out)
+	}
+	if out := runBinary(t, bin, payload, env...); out != "" {
+		t.Errorf("second call in same session should be silent, got %q", out)
+	}
+	other := strings.Replace(payload, "s-1", "s-2", 1)
+	if out := runBinary(t, bin, other, env...); !strings.Contains(out, "integrity degraded") {
+		t.Errorf("new session should get the notice again, got %q", out)
+	}
+}

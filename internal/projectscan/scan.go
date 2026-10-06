@@ -31,20 +31,20 @@ type ScanOpts struct {
 
 // PackagesResult mirrors a preflight.Result for the dep walk.
 type PackagesResult struct {
-	Verdict  string             `json:"verdict"`
-	Reason   string             `json:"reason"`
-	Scanned  int                `json:"scanned"`
-	Findings []map[string]any   `json:"findings"`
-	Notes    []string           `json:"notes,omitempty"`
-	Packages []map[string]any   `json:"packages,omitempty"`
+	Verdict  string           `json:"verdict"`
+	Reason   string           `json:"reason"`
+	Scanned  int              `json:"scanned"`
+	Findings []map[string]any `json:"findings"`
+	Notes    []string         `json:"notes,omitempty"`
+	Packages []map[string]any `json:"packages,omitempty"`
 }
 
 // PluginsResult collects per-plugin analyzer verdicts plus an
 // aggregate worst-verdict across the set.
 type PluginsResult struct {
-	Verdict  string             `json:"verdict"`
-	Scanned  int                `json:"scanned"`
-	Findings []map[string]any   `json:"findings"`
+	Verdict  string           `json:"verdict"`
+	Scanned  int              `json:"scanned"`
+	Findings []map[string]any `json:"findings"`
 }
 
 // Result is the top-level shape watchdog-scan project emits.
@@ -96,11 +96,11 @@ func Run(opts ScanOpts) (*Result, error) {
 	r.ElapsedMs = time.Since(start).Milliseconds()
 
 	log.Event("projectscan_completed", map[string]any{
-		"root":              r.Root,
-		"verdict":           r.Verdict,
-		"packages_scanned":  r.Packages.Scanned,
-		"plugins_scanned":   r.Plugins.Scanned,
-		"elapsed_ms":        r.ElapsedMs,
+		"root":             r.Root,
+		"verdict":          r.Verdict,
+		"packages_scanned": r.Packages.Scanned,
+		"plugins_scanned":  r.Plugins.Scanned,
+		"elapsed_ms":       r.ElapsedMs,
 	})
 	return r, nil
 }

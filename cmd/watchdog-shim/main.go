@@ -416,11 +416,11 @@ func cmdDoctor(args []string) int {
 	}
 
 	// 4. cache dir writable
-	if err := os.MkdirAll(paths.CacheDir(), 0o755); err != nil {
+	if err := os.MkdirAll(paths.CacheDir(), 0o700); err != nil {
 		fmt.Printf("  fail cache dir %s not writable: %v\n", paths.CacheDir(), err)
 	} else {
 		probe := filepath.Join(paths.CacheDir(), ".watchdog-doctor.tmp")
-		if err := os.WriteFile(probe, []byte("ok"), 0o644); err != nil {
+		if err := os.WriteFile(probe, []byte("ok"), 0o600); err != nil {
 			fmt.Printf("  fail cache dir %s not writable: %v\n", paths.CacheDir(), err)
 		} else {
 			_ = os.Remove(probe)

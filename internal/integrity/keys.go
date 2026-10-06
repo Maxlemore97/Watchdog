@@ -105,7 +105,7 @@ func persistKey(priv ed25519.PrivateKey, pub ed25519.PublicKey) error {
 	if len(priv) != ed25519.PrivateKeySize || len(pub) != ed25519.PublicKeySize {
 		return errors.New("invalid key sizes")
 	}
-	if err := os.MkdirAll(paths.WatchdogDir(), 0o755); err != nil {
+	if err := os.MkdirAll(paths.WatchdogDir(), 0o700); err != nil {
 		return err
 	}
 	// Store the seed (32 bytes) rather than the full private key (64

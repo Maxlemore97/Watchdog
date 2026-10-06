@@ -118,7 +118,7 @@ func Write(command, verdict, reason string) {
 	default:
 		return
 	}
-	if err := os.MkdirAll(Dir(), 0o755); err != nil {
+	if err := os.MkdirAll(Dir(), 0o700); err != nil {
 		audit.Record("decision.write_failed", map[string]any{
 			"reason": "mkdir: " + err.Error(),
 		})
@@ -151,7 +151,7 @@ func Write(command, verdict, reason string) {
 	key := Key(command)
 	path := tokenPath(key)
 	tmp := path + "." + strconv.Itoa(os.Getpid()) + ".tmp"
-	if err := os.WriteFile(tmp, data, 0o644); err != nil {
+	if err := os.WriteFile(tmp, data, 0o600); err != nil {
 		audit.Record("decision.write_failed", map[string]any{
 			"reason": "write: " + err.Error(),
 		})
@@ -183,6 +183,11 @@ var ErrExpired = errors.New("cached decision expired")
 // verify is missing. The token is deleted so it doesn't keep
 // failing reads.
 var ErrUnsignedToken = errors.New("cached decision has missing or invalid signature")
+
+// ErrCommandMismatch is returned when a signed token sits under the
+// key of a different command (a token copied or renamed onto another
+// command's cache slot). The token is deleted.
+var ErrCommandMismatch = errors.New("cached decision was issued for a different command")
 
 // Read looks up a cached decision for command. Returns the token on
 // hit, ErrNoDecision when absent, ErrExpired when stale. Any other
@@ -234,6 +239,18 @@ func Read(command string) (*Token, error) {
 			"reason": err.Error(),
 		})
 		return nil, ErrUnsignedToken
+	}
+
+	// Bind the token to the command it was issued for. The filename
+	// is only a hash of the command, so a validly signed allow token
+	// for `npm i lodash` copied to the key of `npm i evil` would
+	// otherwise be honoured. Command is covered by the signature.
+	if canonicalize(t.Command) != canonicalize(command) {
+		_ = os.Remove(path)
+		audit.Record("decision.mismatch", map[string]any{
+			"key": key,
+		})
+		return nil, ErrCommandMismatch
 	}
 
 	audit.Record("decision.consumed", map[string]any{

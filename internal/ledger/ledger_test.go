@@ -401,3 +401,32 @@ func TestScan_RecordsVerdictFields(t *testing.T) {
 		t.Errorf("entry not recorded: %+v", entry)
 	}
 }
+
+// Two sessions scan different plugins from the same snapshot; the
+// second commit must keep the first's results (no lost update), and
+// for the same plugin the newer scan wins.
+func TestCommit_MergesConcurrentScans(t *testing.T) {
+	t.Setenv("WATCHDOG_CACHE_DIR", t.TempDir())
+	Save(Ledger{Version: Version, Entries: map[string]LedgerEntry{
+		"shared": {Name: "shared", ContentHash: "h0", Verdict: "allow", ScannedAt: 100},
+	}})
+
+	a, b := Load(), Load()
+	a.Entries["alpha"] = LedgerEntry{Name: "alpha", ContentHash: "ha", Verdict: "allow", ScannedAt: 200}
+	a.Entries["shared"] = LedgerEntry{Name: "shared", ContentHash: "h2", Verdict: "deny", ScannedAt: 300}
+	b.Entries["beta"] = LedgerEntry{Name: "beta", ContentHash: "hb", Verdict: "ask", ScannedAt: 250}
+	// b still carries the stale shared entry from its snapshot.
+
+	Commit(a)
+	Commit(b)
+
+	got := Load()
+	for _, name := range []string{"alpha", "beta", "shared"} {
+		if _, ok := got.Entries[name]; !ok {
+			t.Errorf("entry %q lost after concurrent commits", name)
+		}
+	}
+	if got.Entries["shared"].Verdict != "deny" {
+		t.Errorf("stale snapshot overwrote newer scan: %+v", got.Entries["shared"])
+	}
+}

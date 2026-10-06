@@ -35,14 +35,23 @@ runs:
         if [ -z "${WATCHDOG_VERSION}" ] || [ "${WATCHDOG_VERSION}" = "main" ]; then
           WATCHDOG_VERSION="latest"
         fi
-        curl -fsSL https://raw.githubusercontent.com/Maxlemore97/Watchdog/main/install.sh | sh
+        # Use the installer from the action's own checkout (the ref the
+        # caller pinned), not whatever is on main right now.
+        sh "${GITHUB_ACTION_PATH}/install.sh"
         echo "${WATCHDOG_INSTALL_DIR}" >> "$GITHUB_PATH"
     - name: Fetch base ref
       shell: bash
+      env:
+        # Passed via env, never interpolated into the script: callers
+        # may feed untrusted values (e.g. a PR's head ref).
+        INPUT_BASE_REF: ${{ inputs.base-ref }}
       run: |
-        base="${{ inputs.base-ref }}"
-        base="${base:-${GITHUB_BASE_REF:-main}}"
-        git fetch --no-tags --depth=50 origin "$base":"refs/remotes/origin/$base"
+        base="${INPUT_BASE_REF:-${GITHUB_BASE_REF:-main}}"
+        if ! git check-ref-format --branch "$base" >/dev/null 2>&1; then
+          echo "watchdog: invalid base-ref: $base" >&2
+          exit 1
+        fi
+        git fetch --no-tags --depth=50 origin "$base:refs/remotes/origin/$base"
     - name: Run Watchdog
       shell: bash
       env:

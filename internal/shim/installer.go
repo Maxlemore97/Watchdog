@@ -154,7 +154,7 @@ func wrapperPaths(dir, tool string) []string {
 
 func renderWrapper(path, tool, execBin string) string {
 	if strings.HasSuffix(path, ".cmd") {
-		return fmt.Sprintf(WindowsWrapperTemplate, tool, execBin, tool)
+		return fmt.Sprintf(WindowsWrapperTemplate, tool, CmdQuote(execBin), CmdQuote(tool))
 	}
-	return fmt.Sprintf(PosixWrapperTemplate, tool, execBin, tool)
+	return fmt.Sprintf(PosixWrapperTemplate, tool, PosixQuote(execBin), PosixQuote(tool))
 }

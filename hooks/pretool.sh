@@ -11,6 +11,8 @@
 #
 # Clean-uninstall path: binary missing AND no manifest → exit 0
 # (other plugins' hook decisions remain in effect).
+# No pipefail: `printf | grep -q` would report SIGPIPE on an early
+# match and turn a detected install into a pass-through.
 set -eu
 
 # shellcheck source-path=SCRIPTDIR
@@ -30,7 +32,7 @@ fi
 input=$(cat)
 
 # Only inspect Bash tool calls. Other tools pass through silently.
-tool=$(extract_json_field "$input" "d.get('tool_name','')" || true)
+tool=$(extract_json_field "$input" "tool_name" || true)
 if [ "$tool" != "Bash" ]; then
   exit 0
 fi
@@ -42,7 +44,7 @@ fi
 # back to denying every Bash call, because over-blocking the user's
 # normal workflow is worse than the (already-unlikely) tamper case
 # the fallback was meant to catch.
-cmd=$(extract_json_field "$input" "d.get('tool_input',{}).get('command','')" || true)
+cmd=$(extract_json_field "$input" "tool_input.command" || true)
 if [ -z "$cmd" ]; then
   exit 0
 fi

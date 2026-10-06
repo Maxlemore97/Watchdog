@@ -200,7 +200,7 @@ func TestInvokeClaude_ArgvShape(t *testing.T) {
 	// claude argv must include the hardening flags.
 	got := strings.Join(args, " ")
 	for _, needle := range []string{"-p", "--model", "--output-format", "json",
-		"--max-turns", "1", "--allowed-tools"} {
+		"--max-turns", "1", "--tools", "--strict-mcp-config", "--no-session-persistence"} {
 		if !strings.Contains(got, needle) {
 			t.Errorf("claude argv missing %q: %v", needle, args)
 		}
