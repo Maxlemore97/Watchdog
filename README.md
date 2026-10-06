@@ -524,7 +524,9 @@ Everything's an env var. Defaults are sensible; nothing's required.
 | Env var                         | Default                       | What it does                                                                                      |
 |---------------------------------|-------------------------------|---------------------------------------------------------------------------------------------------|
 | `WATCHDOG_MODE`                 | `both`                        | `osv` / `claude` / `both`                                                                         |
-| `WATCHDOG_MIN_SEVERITY`         | `low`                         | OSV severity floor (`none`/`low`/`medium`/`high`/`critical`)                                      |
+| `WATCHDOG_MIN_SEVERITY`         | `low`                         | OSV severity floor (`none`/`low`/`medium`/`high`/`critical`); malicious-package (`MAL-*`) advisories always deny |
+| `WATCHDOG_MIN_RELEASE_AGE_HOURS` | `24`                        | Ask when the requested version was published more recently (npm, PyPI, crates.io); `0` = off       |
+| `WATCHDOG_MIN_PACKAGE_AGE_DAYS` | `7`                           | Ask when the package itself is newer (slopsquatting); a name missing from the registry also asks. Both `0` = no registry lookups |
 | `WATCHDOG_FAILCLOSED_VERDICT`   | `ask` (hooks) / `deny` (shim) | Verdict to emit when a check can't run (OSV unreachable, LLM CLI missing, analyzer panic/timeout) |
 | `WATCHDOG_MAX_PACKAGES`         | `50`                          | Above this, return `ask` without scanning                                                         |
 | `WATCHDOG_LLM_PROVIDER`         | `auto`                        | `claude` / `gemini` / `openai` / `ollama` / `generic`                                             |

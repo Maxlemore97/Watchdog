@@ -54,6 +54,8 @@ func TestPreflightInstall_DoesNotWriteDecisionForAsk(t *testing.T) {
 	srv.Close()
 	t.Setenv("WATCHDOG_OSV_ENDPOINT", srv.URL)
 	t.Setenv("PATH", "") // no LLM CLI → analyzer falls back too
+	t.Setenv("WATCHDOG_MIN_RELEASE_AGE_HOURS", "0") // no registry lookups
+	t.Setenv("WATCHDOG_MIN_PACKAGE_AGE_DAYS", "0")
 
 	r := PreflightInstall("npm install some-unknown-x9q@1.0.0", "osv")
 	if r.Verdict == "allow" {

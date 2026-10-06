@@ -21,6 +21,7 @@ import (
 	"github.com/Maxlemore97/watchdog/internal/log"
 	"github.com/Maxlemore97/watchdog/internal/osv"
 	"github.com/Maxlemore97/watchdog/internal/policy"
+	"github.com/Maxlemore97/watchdog/internal/registryage"
 	"github.com/Maxlemore97/watchdog/internal/types"
 )
 
@@ -40,6 +41,7 @@ const DefaultMaxPackages = 50
 var (
 	queryOSV       func(types.Package) ([]map[string]any, error) = osv.Query
 	analyzePackage                                               = analyzer.AnalyzePackage
+	lookupAge                                                    = registryage.Lookup
 )
 
 // Options tweaks individual preflight calls.
@@ -118,6 +120,12 @@ func Packages(pkgs []types.Package, notes []string, opts Options) Result {
 
 	if mode == "osv" || mode == "both" {
 		decisions, findings, processedOSV, budgetHit = osvPhase(pkgs, fallback, overBudget, decisions, findings)
+	}
+
+	// Registry age (all modes): non-existent names and very new
+	// packages/releases are asked about. Cheap metadata lookups.
+	if !budgetHit && !osvDenied(decisions) {
+		decisions, findings = agePhase(pkgs, decisions, findings)
 	}
 
 	if (mode == "claude" || mode == "both") && !budgetHit && !osvDenied(decisions) {
@@ -301,6 +309,39 @@ type osvResult struct {
 	pkg   types.Package
 	vulns []map[string]any
 	err   error
+}
+
+// agePhase looks up publish dates in parallel and adds an ask
+// decision for hallucinated names, brand-new packages and releases
+// still inside the cooldown. Lookup failures are ignored (fail open).
+func agePhase(pkgs []types.Package, decisions []decision, findings []map[string]any) ([]decision, []map[string]any) {
+	infos := make([]registryage.Info, len(pkgs))
+	sem := make(chan struct{}, min(len(pkgs), 8))
+	var wg sync.WaitGroup
+	for i, p := range pkgs {
+		wg.Add(1)
+		sem <- struct{}{}
+		go func() {
+			defer wg.Done()
+			defer func() { <-sem }()
+			defer func() { _ = recover() }()
+			infos[i] = lookupAge(p)
+		}()
+	}
+	wg.Wait()
+	for i, p := range pkgs {
+		v, reason := registryage.Verdict(p, infos[i])
+		if v == "" {
+			continue
+		}
+		decisions = append(decisions, decision{Verdict: v, Reason: reason})
+		findings = append(findings, map[string]any{
+			"package": pkgLabel(p),
+			"source":  "registry_age",
+			"reason":  reason,
+		})
+	}
+	return decisions, findings
 }
 
 func runOSVParallel(pkgs []types.Package) []osvResult {

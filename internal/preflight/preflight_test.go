@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Maxlemore97/watchdog/internal/registryage"
 	"github.com/Maxlemore97/watchdog/internal/types"
 )
 
@@ -33,12 +34,14 @@ func withStubs(t *testing.T,
 	a func(string, string, string) map[string]any,
 ) func() {
 	t.Helper()
-	origQ, origA := queryOSV, analyzePackage
+	origQ, origA, origAge := queryOSV, analyzePackage, lookupAge
 	queryOSV = q
 	analyzePackage = a
+	lookupAge = func(types.Package) registryage.Info { return registryage.Info{} } // no network
 	return func() {
 		queryOSV = origQ
 		analyzePackage = origA
+		lookupAge = origAge
 	}
 }
 
@@ -443,5 +446,45 @@ func TestRunOSVParallel_PanicRecover(t *testing.T) {
 	// Must mention the panic recovery somewhere.
 	if !strings.Contains(r.Reason, "panic") && !strings.Contains(r.Reason, "OSV unreachable") {
 		t.Errorf("expected panic mention in reason: %q", r.Reason)
+	}
+}
+
+func TestPackages_RegistryAge(t *testing.T) {
+	restore := withStubs(t, stubOK, func(eco, name, ver string) map[string]any { return nil })
+	defer restore()
+	fresh := time.Now().Add(-3 * time.Hour)
+	old := time.Now().Add(-400 * 24 * time.Hour)
+	lookupAge = func(p types.Package) registryage.Info {
+		switch p.Name {
+		case "hallucinated-pkg":
+			return registryage.Info{Known: true}
+		case "brand-new":
+			return registryage.Info{Known: true, Exists: true, FirstPublished: fresh, VersionTime: fresh}
+		case "hot-release":
+			return registryage.Info{Known: true, Exists: true, FirstPublished: old, VersionTime: fresh}
+		}
+		return registryage.Info{Known: true, Exists: true, FirstPublished: old, VersionTime: old}
+	}
+	cases := map[string]string{
+		"hallucinated-pkg": "does not exist",
+		"brand-new":        "first published",
+		"hot-release":      "cooldown",
+		"lodash":           "",
+	}
+	for name, want := range cases {
+		r := Packages([]types.Package{pkg(name, "1.0.0")}, nil, Options{Mode: "osv"})
+		if want == "" {
+			if r.Verdict != "allow" {
+				t.Errorf("%s: %q %q, want allow", name, r.Verdict, r.Reason)
+			}
+			continue
+		}
+		if r.Verdict != "ask" || !strings.Contains(r.Reason, want) {
+			t.Errorf("%s: %q %q, want ask containing %q", name, r.Verdict, r.Reason, want)
+		}
+	}
+	t.Setenv("WATCHDOG_MIN_RELEASE_AGE_HOURS", "0")
+	if r := Packages([]types.Package{pkg("hot-release", "1.0.0")}, nil, Options{Mode: "osv"}); r.Verdict != "allow" {
+		t.Errorf("cooldown disabled: %q %q", r.Verdict, r.Reason)
 	}
 }

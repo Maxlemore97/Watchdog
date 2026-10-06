@@ -33,6 +33,8 @@ func fakeOSV(t *testing.T, malicious ...string) {
 	t.Setenv("WATCHDOG_OSV_ENDPOINT", srv.URL)
 	t.Setenv("WATCHDOG_CACHE_DIR", t.TempDir())
 	t.Setenv("WATCHDOG_RESOLVE_LATEST", "0")
+	t.Setenv("WATCHDOG_MIN_RELEASE_AGE_HOURS", "0")
+	t.Setenv("WATCHDOG_MIN_PACKAGE_AGE_DAYS", "0")
 	t.Setenv("WATCHDOG_LOG", filepath.Join(t.TempDir(), "events.jsonl"))
 }
 
