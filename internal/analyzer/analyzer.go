@@ -23,6 +23,7 @@ import (
 	"time"
 
 	"github.com/Maxlemore97/watchdog/internal/fetchers"
+	"github.com/Maxlemore97/watchdog/internal/hiddentext"
 	"github.com/Maxlemore97/watchdog/internal/log"
 	"github.com/Maxlemore97/watchdog/internal/paths"
 	"github.com/Maxlemore97/watchdog/internal/providers"
@@ -79,6 +80,11 @@ var hostilePatterns = []hostilePattern{
 	{regexp.MustCompile(`\bxox[bpoa]-[A-Za-z0-9-]{10,}`), "Slack token shape"},
 	{regexp.MustCompile(`(printenv|env)\s*\|\s*(curl|wget|nc)\b`), "env piped to network sink"},
 	{regexp.MustCompile(`curl\s+[^|;&]*\|\s*(bash|sh|zsh)\b`), "curl piped to shell"},
+	// An install script driving the victim's own AI agent with its
+	// safety switches off (s1ngularity/Nx, 2025).
+	{regexp.MustCompile(`\b(claude|gemini|codex|q|cursor-agent|copilot)\b[^\n]{0,200}` +
+		`(--dangerously-skip-permissions|--dangerously-bypass-approvals-and-sandbox|--yolo|--trust-all-tools|--allow-all-tools)`),
+		"AI agent CLI invoked with permissions disabled"},
 }
 
 // isDocPath classifies README-like files. Doc files routinely
@@ -104,6 +110,9 @@ func isDocPath(p string) bool {
 func Prefilter(b *types.ArtifactBundle) map[string]any {
 	if b == nil {
 		return nil
+	}
+	if v := hiddenTextVerdict(b); v != nil {
+		return v
 	}
 	var codeHits, docHits []string
 	matchedLabel := ""
@@ -176,6 +185,45 @@ func requireCompleteReview(b *types.ArtifactBundle, v map[string]any) map[string
 	out["reason"] = "executable content exceeded review size caps and was only partially analyzed: " +
 		strings.Join(truncIndicators(b.TruncatedExecutable, 5), ", ")
 	return out
+}
+
+// hiddenTextVerdict runs the invisible-character check over every
+// file. Unlike the regex prefilter it does not soften hits in Markdown:
+// for agent artifacts (SKILL.md, CLAUDE.md, commands) the Markdown *is*
+// the instruction surface. Returns the most severe verdict, or nil.
+func hiddenTextVerdict(b *types.ArtifactBundle) map[string]any {
+	var worst string
+	var indicators []string
+	for _, p := range sortedKeys(b.Files) {
+		v, reason := hiddentext.Scan(b.Files[p]).Verdict(!isDocPath(p))
+		if v == "" {
+			continue
+		}
+		indicators = append(indicators, reason+" in "+p)
+		if verdictRank(v) > verdictRank(worst) {
+			worst = v
+		}
+	}
+	if worst == "" {
+		return nil
+	}
+	log.Event("prefilter_"+worst, map[string]any{
+		"ecosystem": b.Ecosystem,
+		"name":      b.Name,
+		"version":   b.Version,
+		"reason":    "hidden_text",
+		"hit_count": len(indicators),
+	})
+	risk := "medium"
+	if worst == "deny" {
+		risk = "critical"
+	}
+	return map[string]any{
+		"verdict":    worst,
+		"risk":       risk,
+		"reason":     "prefilter: " + indicators[0],
+		"indicators": truncIndicators(indicators, 10),
+	}
 }
 
 func sortedKeys(m map[string]string) []string {
@@ -557,15 +605,16 @@ func AnalyzePackage(ecosystem, name, version string) (result map[string]any) {
 			"reason":  fmt.Sprintf("could not fetch %s:%s", ecosystem, name),
 		}
 	}
+	// Deterministic checks run before the cache: they are cheap, and a
+	// verdict cached before a new check existed must not mask it.
+	if v := Prefilter(bundle); v != nil {
+		evt.route = "prefilter"
+		return v
+	}
 	key := cacheKey(ecosystem, name, version, bundle.UpstreamDigest)
 	if cached := cacheLoad(key); cached != nil {
 		evt.route = "cache"
 		return cached
-	}
-	if v := Prefilter(bundle); v != nil {
-		cacheStore(key, v)
-		evt.route = "prefilter"
-		return v
 	}
 	// Scope: an LLM can't beat OSV + Snyk/Socket at finding CVEs in
 	// published-package source. The analyzer fires only when the
@@ -638,6 +687,11 @@ func AnalyzeLocalPlugin(name, dir, contentHash string) (result map[string]any) {
 	// bundle.UpstreamDigest so the key reflects the exact bytes the
 	// LLM will see. Callers that pass an empty contentHash skip the
 	// cache entirely — preserves the prior opt-out semantics.
+	// Deterministic checks first; see AnalyzePackage.
+	if v := Prefilter(bundle); v != nil {
+		evt.route = "prefilter"
+		return v
+	}
 	var key string
 	if contentHash != "" {
 		key = cacheKey("plugin-local", name, contentHash, bundle.UpstreamDigest)
@@ -645,13 +699,6 @@ func AnalyzeLocalPlugin(name, dir, contentHash string) (result map[string]any) {
 			evt.route = "cache"
 			return cached
 		}
-	}
-	if v := Prefilter(bundle); v != nil {
-		if contentHash != "" {
-			cacheStore(key, v)
-		}
-		evt.route = "prefilter"
-		return v
 	}
 	prompt := buildUserPrompt(bundle)
 	output, prov, cfg, err := providers.InvokeLLM(prompt, SystemPrompt)

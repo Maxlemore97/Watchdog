@@ -58,6 +58,10 @@ func Hermetic(t testing.TB, extra ...string) []string {
 		"WATCHDOG_AUDIT_LOG="+filepath.Join(home, "audit.jsonl"),
 		"WATCHDOG_LOG="+filepath.Join(home, "events.jsonl"),
 		"WATCHDOG_LLM_BIN="+NoLLMBin,
+		// No registry-age lookups: tests must not depend on what npm
+		// or PyPI publish today.
+		"WATCHDOG_MIN_RELEASE_AGE_HOURS=0",
+		"WATCHDOG_MIN_PACKAGE_AGE_DAYS=0",
 	)
 	return append(env, extra...)
 }

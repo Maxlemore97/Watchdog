@@ -45,7 +45,8 @@ curl -fsSL https://raw.githubusercontent.com/Maxlemore97/Watchdog/main/install.s
 # 2. If the installer warned about PATH, fix it. Then install the
 #    package-manager shims. On a TTY, this also generates the local
 #    Ed25519 signing keypair and prompts to wire up any detected
-#    MCP-aware hosts (Claude Desktop, Cursor, Continue, Cline, Zed).
+#    MCP-aware hosts (Claude Desktop, Cursor, Continue, Cline, Zed,
+#    VS Code, Windsurf, Gemini CLI, Codex).
 #    Use --no-register to skip the prompt; --register (or -y) to
 #    accept without prompting.
 export PATH="$HOME/.local/bin:$PATH"
@@ -283,7 +284,7 @@ watchdog-scan project . --plugins-only   # skip the dependency walk
 watchdog-scan project . --packages-only  # skip the plugin/skill walk
 ```
 
-Lockfiles parsed: `package-lock.json`, `pnpm-lock.yaml`, `Pipfile.lock`, `poetry.lock`, `uv.lock`, `Cargo.lock`, `Gemfile.lock`, `composer.lock`, `go.mod`, `packages.lock.json`. Bare manifests without a lockfile are skipped (pinned versions only) and surfaced as a note. Plugin roots detected: any directory holding `.claude-plugin/`, `skills/`, `commands/`, `hooks/`, or a top-level `plugin.json`. Standalone `CLAUDE.md` / `agents.md` files are listed in the report. Exit code follows the worst verdict (0 for `allow`, 1 for `ask` / `deny`).
+Lockfiles parsed: `package-lock.json`, `pnpm-lock.yaml`, `Pipfile.lock`, `poetry.lock`, `uv.lock`, `Cargo.lock`, `Gemfile.lock`, `composer.lock`, `go.mod`, `packages.lock.json`. Bare manifests without a lockfile are skipped (pinned versions only) and surfaced as a note. Plugin roots detected: any directory holding `.claude-plugin/`, `skills/`, `commands/`, `hooks/`, or a top-level `plugin.json`. The **agent surface** is checked deterministically (no LLM): instruction files and rules of every major agent (`CLAUDE.md`, `AGENTS.md`, `GEMINI.md`, `.cursor/rules/`, `.windsurf/rules/`, `.clinerules`, Copilot instructions, `.claude/{commands,agents,skills}/`) for hidden Unicode (tag characters, bidi controls, zero-width runs); `.claude/settings*.json` for hooks, `enableAllProjectMcpServers`, `bypassPermissions` and unrestricted Bash; `.vscode/tasks.json` for tasks that run on folder open; project MCP configs for unpinned servers, plain-HTTP remotes and literal credentials. The SessionStart hook runs the same check on the session's working directory and tells the agent about findings. Exit code follows the worst verdict (0 for `allow`, 1 for `ask` / `deny`).
 
 ### Scan locally installed Claude Code plugins
 
@@ -296,6 +297,16 @@ watchdog-scan local --root /some/other/dir   # repeatable: append extra root(s)
 ```
 
 In Claude Code, the same scan is exposed as the `/watchdog-scan-local` slash command (auto-discovered from `commands/watchdog-scan-local.md`).
+
+### Audit configured MCP servers
+
+`watchdog-scan mcp` reads the user-level MCP configs of every supported host (Claude Desktop, Cursor, Continue, Cline, Zed, VS Code, Windsurf, Gemini CLI, Codex, OpenCode, and Claude Code's `~/.claude.json` including per-project servers) and reports, per server: unpinned package runners (`npx -y pkg`, `uvx pkg`, `@latest` — every launch may pull a new release), plain-HTTP remotes, literal credentials, and an OSV preflight of the package it launches (malicious-package advisories deny).
+
+```bash
+watchdog-scan mcp --format=text     # OSV only, no LLM cost
+watchdog-scan mcp --deep            # also run the LLM analyzer on launched packages
+watchdog-scan mcp --config ./x.json # audit a specific file (repeatable)
+```
 
 ---
 
@@ -434,11 +445,17 @@ If you'd rather hand-edit the config, the shape is:
 }
 ```
 
-Auto-registration covers Claude Desktop, Cursor, Continue, Cline, and Zed. Each uses its native config:
+Auto-registration covers Claude Desktop, Cursor, Continue, Cline, Zed, VS Code, Windsurf, Gemini CLI, and Codex. Each uses its native config (existing file permissions are kept):
 
 - **Continue**: `~/.continue/config.yaml` (or `.yml` / `.json` — detected automatically). YAML round-trip via `gopkg.in/yaml.v3` does not preserve comments.
 - **Cline**: VS Code's extension storage path (`~/Library/Application Support/Code/.../saoudrizwan.claude-dev/.../cline_mcp_settings.json` on macOS; `~/.config/Code/...` on Linux).
 - **Zed**: `~/.config/zed/settings.json` with the `context_servers` key (not `mcpServers`) and the nested `{source, command:{path, args}}` shape.
+- **VS Code** (Copilot agent mode): user `mcp.json` (`~/Library/Application Support/Code/User/` on macOS, `~/.config/Code/User/` on Linux, `%APPDATA%/Code/User/` on Windows) under `servers` with `type: stdio`. A file with comments is left untouched; add the entry by hand.
+- **Windsurf**: `~/.codeium/windsurf/mcp_config.json` (`mcpServers`).
+- **Gemini CLI**: `~/.gemini/settings.json` (`mcpServers`, other settings preserved).
+- **Codex CLI**: `$CODEX_HOME/config.toml` (default `~/.codex/`), table `[mcp_servers.watchdog]`. Edited as text, so comments and ordering survive.
+
+Claude Code needs no registration: the plugin ships the hooks and the MCP tools.
 
 `watchdog-shim install` runs the registration prompt automatically when stdin is a TTY. Use `--register` / `-y` to skip the prompt and accept; `--no-register` to skip the prompt and decline. Non-TTY contexts (CI) get a one-line hint instead of hanging.
 
@@ -507,7 +524,9 @@ Everything's an env var. Defaults are sensible; nothing's required.
 | Env var                         | Default                       | What it does                                                                                      |
 |---------------------------------|-------------------------------|---------------------------------------------------------------------------------------------------|
 | `WATCHDOG_MODE`                 | `both`                        | `osv` / `claude` / `both`                                                                         |
-| `WATCHDOG_MIN_SEVERITY`         | `low`                         | OSV severity floor (`none`/`low`/`medium`/`high`/`critical`)                                      |
+| `WATCHDOG_MIN_SEVERITY`         | `low`                         | OSV severity floor (`none`/`low`/`medium`/`high`/`critical`); malicious-package (`MAL-*`) advisories always deny |
+| `WATCHDOG_MIN_RELEASE_AGE_HOURS` | `24`                        | Ask when the requested version was published more recently (npm, PyPI, crates.io); `0` = off       |
+| `WATCHDOG_MIN_PACKAGE_AGE_DAYS` | `7`                           | Ask when the package itself is newer (slopsquatting); a name missing from the registry also asks. Both `0` = no registry lookups |
 | `WATCHDOG_FAILCLOSED_VERDICT`   | `ask` (hooks) / `deny` (shim) | Verdict to emit when a check can't run (OSV unreachable, LLM CLI missing, analyzer panic/timeout) |
 | `WATCHDOG_MAX_PACKAGES`         | `50`                          | Above this, return `ask` without scanning                                                         |
 | `WATCHDOG_LLM_PROVIDER`         | `auto`                        | `claude` / `gemini` / `openai` / `ollama` / `generic`                                             |
@@ -648,7 +667,7 @@ internal/
   shim/       wrapper templates, FindRealBinary
   integrity/  install-time manifest + Verify / VerifyDeep + Ed25519 signing + baseline
   decisions/  short-TTL MCP↔shim handoff cache (signed)
-  hosts/      register watchdog-mcp with detected MCP hosts (5 adapters)
+  hosts/      register watchdog-mcp with detected MCP hosts (9 adapters)
   mcp/        pure-Go handlers + Guard (panic / timeout / audit)
   daemon/     launchd plist / systemd unit templates for daemon mode
   ghaction/   workflow command emitter, path classifiers

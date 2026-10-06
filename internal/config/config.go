@@ -53,6 +53,8 @@ type Config struct {
 	PluginDirs        string        // WATCHDOG_PLUGIN_DIRS
 	ShimDir           string        // WATCHDOG_SHIM_DIR
 	HeadRef           string        // WATCHDOG_HEAD_REF
+	MinReleaseAge     int           // WATCHDOG_MIN_RELEASE_AGE_HOURS — ask for versions younger than this (0 = off)
+	MinPackageAge     int           // WATCHDOG_MIN_PACKAGE_AGE_DAYS — ask for packages first published more recently (0 = off)
 }
 
 var (
@@ -104,6 +106,12 @@ func Load() (Config, error) {
 		return c, err
 	}
 	if c.HookBudget, err = envSecs("WATCHDOG_HOOK_BUDGET_SECS", 30*time.Second); err != nil {
+		return c, err
+	}
+	if c.MinReleaseAge, err = envNonNegInt("WATCHDOG_MIN_RELEASE_AGE_HOURS", 24); err != nil {
+		return c, err
+	}
+	if c.MinPackageAge, err = envNonNegInt("WATCHDOG_MIN_PACKAGE_AGE_DAYS", 7); err != nil {
 		return c, err
 	}
 
@@ -191,6 +199,14 @@ func envBool(name string, def bool) bool {
 		return true
 	}
 	return def
+}
+
+// envNonNegInt is envInt that also accepts 0 (used as "off").
+func envNonNegInt(name string, def int) (int, error) {
+	if strings.TrimSpace(os.Getenv(name)) == "0" {
+		return 0, nil
+	}
+	return envInt(name, def)
 }
 
 func envInt(name string, def int) (int, error) {

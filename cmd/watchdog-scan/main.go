@@ -41,6 +41,9 @@ func main() {
 	if os.Args[1] == "local" {
 		os.Exit(runLocal(os.Args[2:]))
 	}
+	if os.Args[1] == "mcp" {
+		os.Exit(runMCP(os.Args[2:]))
+	}
 
 	target := strings.TrimSpace(os.Args[1])
 
@@ -199,6 +202,49 @@ func runLocal(args []string) int {
 		fmt.Printf("plugins: %s  (%d scanned)\n", result.Plugins.Verdict, result.Plugins.Scanned)
 		for _, n := range result.Notes {
 			fmt.Printf("  %s\n", n)
+		}
+	default:
+		data, _ := json.MarshalIndent(result, "", "  ")
+		fmt.Println(string(data))
+	}
+	if policy.Rank(result.Verdict) >= policy.Rank("ask") {
+		return 1
+	}
+	return 0
+}
+
+// runMCP audits every MCP server configured at user level across
+// agent hosts: pinning, transport, literal secrets, and an OSV (or,
+// with --deep, OSV + LLM) preflight of the package each one launches.
+func runMCP(args []string) int {
+	fs := flag.NewFlagSet("mcp", flag.ContinueOnError)
+	format := fs.String("format", "json", "output format: json or text")
+	deep := fs.Bool("deep", false, "also run the LLM analyzer on launched packages")
+	configs := stringList{}
+	fs.Var(&configs, "config", "config file to audit instead of the defaults (repeatable)")
+	if err := fs.Parse(args); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 2
+	}
+	mode := "osv"
+	if *deep {
+		mode = "both"
+	}
+	result := projectscan.AuditMCP(projectscan.MCPAuditOpts{Configs: configs, Mode: mode})
+	switch *format {
+	case "text":
+		fmt.Printf("verdict: %s  (%d servers in %d configs)\n", result.Verdict, len(result.Servers), len(result.Configs))
+		for _, s := range result.Servers {
+			fmt.Printf("  %-6s %s  [%s]\n", s.Verdict, s.Name, s.Source)
+			for _, f := range s.Findings {
+				fmt.Printf("         - %s\n", f.Reason)
+			}
+			if s.Preflight != nil && s.Preflight.Verdict != "allow" {
+				fmt.Printf("         - package: %s\n", s.Preflight.Reason)
+			}
+		}
+		for _, e := range result.Errors {
+			fmt.Printf("  error: %s\n", e)
 		}
 	default:
 		data, _ := json.MarshalIndent(result, "", "  ")
