@@ -17,6 +17,13 @@ const (
 	TamperWatchdogKill     = "WATCHDOG_KILL"
 	TamperWatchdogRemove   = "WATCHDOG_REMOVE"
 	TamperManifestTamper   = "MANIFEST_TAMPER"
+	// TamperWatchdogEnv: the command sets a WATCHDOG_* variable
+	// (`WATCHDOG_DISABLE=1 npm i x`, `export WATCHDOG_MODE=osv`). Every
+	// Watchdog binary reads its configuration from the environment, so
+	// an agent-controlled assignment can switch scanning off for the
+	// child process. Configuration belongs in the user's shell profile,
+	// not in an agent-issued command.
+	TamperWatchdogEnv = "WATCHDOG_ENV_OVERRIDE"
 )
 
 // Cheap, broad regexes used for whole-command matches. Anchors are
@@ -28,6 +35,7 @@ var (
 	manifestPathRE = regexp.MustCompile(`(?:^|[/\s'"])\.watchdog/manifest\.json\b`)
 	// Watchdog process names: pkill / killall accept basenames.
 	watchdogProcRE = regexp.MustCompile(`\bwatchdog-(pretool|prompt|session|shim|shim-exec|mcp|scan|action)\b`)
+	watchdogEnvRE  = regexp.MustCompile(`^WATCHDOG_[A-Za-z0-9_]*=`)
 )
 
 // TamperPatterns inspects a shell command for signatures of attempts
@@ -115,47 +123,36 @@ func scanTokens(tokens []string, hits map[string]bool) {
 		if tok == "export" && i+1 < len(tokens) && strings.HasPrefix(tokens[i+1], "PATH=") {
 			hits[TamperPathOverride] = true
 		}
+		// `WATCHDOG_DISABLE=1 …`, `export WATCHDOG_X=…`, `env
+		// WATCHDOG_X=… …`, `declare -x WATCHDOG_X=…`, and macOS
+		// `launchctl setenv WATCHDOG_X …`.
+		if watchdogEnvRE.MatchString(tok) {
+			hits[TamperWatchdogEnv] = true
+		}
+		if tok == "setenv" && i+1 < len(tokens) && strings.HasPrefix(tokens[i+1], "WATCHDOG_") {
+			hits[TamperWatchdogEnv] = true
+		}
 	}
 
-	// 2. Absolute path to a package manager + install subcommand.
-	//    Strip env-prefix tokens (`PATH=... FOO=bar /usr/bin/npm install ...`)
-	//    so the bare command can be inspected.
-	cmdStart := 0
-	for cmdStart < len(tokens) {
-		t := tokens[cmdStart]
-		if strings.Contains(t, "=") && !strings.HasPrefix(t, "-") && !strings.HasPrefix(t, "/") {
-			cmdStart++
-			continue
-		}
-		break
-	}
-	if cmdStart < len(tokens) {
-		head := tokens[cmdStart]
-		if strings.HasPrefix(head, "/") || strings.HasPrefix(head, "~/") {
-			base := filepath.Base(head)
-			if _, ok := EcosystemByCmd[base]; ok && cmdStart+1 < len(tokens) {
-				sub := tokens[cmdStart+1]
-				if InstallSubcmds[base][sub] {
-					hits[TamperAbsPathInstall] = true
-				}
-				// Multi-word verbs: `dotnet add [<proj>] package`.
-				if base == "dotnet" && sub == "add" {
-					for j := cmdStart + 2; j < cmdStart+4 && j < len(tokens); j++ {
-						if tokens[j] == "package" {
-							hits[TamperAbsPathInstall] = true
-							break
-						}
-					}
-				}
+	// 2. Path-qualified package manager + install subcommand
+	//    (`/opt/homebrew/bin/npm install x`, `./node_modules/.bin/pnpm
+	//    add x`). A path skips PATH lookup and therefore the shim.
+	//    Wrapper prefixes (`sudo`, `env`, `VAR=x`) are peeled first.
+	st := stripCommandPrefixes(tokens)
+	if len(st.tokens) > 0 {
+		head := st.tokens[0]
+		if strings.ContainsAny(head, "/\\") || strings.HasPrefix(head, "~") {
+			if _, viaPython, ok := detectInstall(st.tokens); ok && !viaPython {
+				hits[TamperAbsPathInstall] = true
 			}
 		}
 	}
 
 	// 3. pkill / killall against watchdog-*.
-	if len(tokens) > 0 {
-		head := filepath.Base(tokens[0])
+	if len(st.tokens) > 0 {
+		head := filepath.Base(st.tokens[0])
 		if head == "pkill" || head == "killall" {
-			for _, rest := range tokens[1:] {
+			for _, rest := range st.tokens[1:] {
 				if strings.HasPrefix(rest, "watchdog") {
 					hits[TamperWatchdogKill] = true
 					break
@@ -170,11 +167,11 @@ func scanTokens(tokens []string, hits map[string]bool) {
 	}
 
 	// 4. rm / mv / chmod against ~/.watchdog/ or its contents.
-	if len(tokens) > 0 {
-		head := filepath.Base(tokens[0])
+	if len(st.tokens) > 0 {
+		head := filepath.Base(st.tokens[0])
 		switch head {
-		case "rm", "mv", "chmod", "chown":
-			for _, rest := range tokens[1:] {
+		case "rm", "mv", "chmod", "chown", "unlink", "truncate", "shred":
+			for _, rest := range st.tokens[1:] {
 				if isWatchdogPath(rest) {
 					hits[TamperWatchdogRemove] = true
 					// Manifest-specific: bump the more-specific code too.

@@ -28,10 +28,10 @@ var ParityCases = []struct {
 			{Ecosystem: "npm", Name: "b"},
 			{Ecosystem: "npm", Name: "c"},
 		}, 0},
-	{"npm-with-flag-arg", "npm install --registry https://r foo",
-		[]types.Package{{Ecosystem: "npm", Name: "foo"}}, 0},
-	{"npm-with-inline-flag-arg", "npm install --registry=https://r foo",
-		[]types.Package{{Ecosystem: "npm", Name: "foo"}}, 0},
+	{"npm-with-flag-arg", "npm install --registry https://r foo", // registry flag → note
+		[]types.Package{{Ecosystem: "npm", Name: "foo"}}, 1},
+	{"npm-with-inline-flag-arg", "npm install --registry=https://r foo", // registry flag → note
+		[]types.Package{{Ecosystem: "npm", Name: "foo"}}, 1},
 
 	{"pip-basic", "pip install requests",
 		[]types.Package{{Ecosystem: "PyPI", Name: "requests"}}, 0},
