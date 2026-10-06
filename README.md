@@ -45,7 +45,8 @@ curl -fsSL https://raw.githubusercontent.com/Maxlemore97/Watchdog/main/install.s
 # 2. If the installer warned about PATH, fix it. Then install the
 #    package-manager shims. On a TTY, this also generates the local
 #    Ed25519 signing keypair and prompts to wire up any detected
-#    MCP-aware hosts (Claude Desktop, Cursor, Continue, Cline, Zed).
+#    MCP-aware hosts (Claude Desktop, Cursor, Continue, Cline, Zed,
+#    VS Code, Windsurf, Gemini CLI, Codex).
 #    Use --no-register to skip the prompt; --register (or -y) to
 #    accept without prompting.
 export PATH="$HOME/.local/bin:$PATH"
@@ -434,11 +435,17 @@ If you'd rather hand-edit the config, the shape is:
 }
 ```
 
-Auto-registration covers Claude Desktop, Cursor, Continue, Cline, and Zed. Each uses its native config:
+Auto-registration covers Claude Desktop, Cursor, Continue, Cline, Zed, VS Code, Windsurf, Gemini CLI, and Codex. Each uses its native config (existing file permissions are kept):
 
 - **Continue**: `~/.continue/config.yaml` (or `.yml` / `.json` — detected automatically). YAML round-trip via `gopkg.in/yaml.v3` does not preserve comments.
 - **Cline**: VS Code's extension storage path (`~/Library/Application Support/Code/.../saoudrizwan.claude-dev/.../cline_mcp_settings.json` on macOS; `~/.config/Code/...` on Linux).
 - **Zed**: `~/.config/zed/settings.json` with the `context_servers` key (not `mcpServers`) and the nested `{source, command:{path, args}}` shape.
+- **VS Code** (Copilot agent mode): user `mcp.json` (`~/Library/Application Support/Code/User/` on macOS, `~/.config/Code/User/` on Linux, `%APPDATA%/Code/User/` on Windows) under `servers` with `type: stdio`. A file with comments is left untouched; add the entry by hand.
+- **Windsurf**: `~/.codeium/windsurf/mcp_config.json` (`mcpServers`).
+- **Gemini CLI**: `~/.gemini/settings.json` (`mcpServers`, other settings preserved).
+- **Codex CLI**: `$CODEX_HOME/config.toml` (default `~/.codex/`), table `[mcp_servers.watchdog]`. Edited as text, so comments and ordering survive.
+
+Claude Code needs no registration: the plugin ships the hooks and the MCP tools.
 
 `watchdog-shim install` runs the registration prompt automatically when stdin is a TTY. Use `--register` / `-y` to skip the prompt and accept; `--no-register` to skip the prompt and decline. Non-TTY contexts (CI) get a one-line hint instead of hanging.
 
@@ -648,7 +655,7 @@ internal/
   shim/       wrapper templates, FindRealBinary
   integrity/  install-time manifest + Verify / VerifyDeep + Ed25519 signing + baseline
   decisions/  short-TTL MCP↔shim handoff cache (signed)
-  hosts/      register watchdog-mcp with detected MCP hosts (5 adapters)
+  hosts/      register watchdog-mcp with detected MCP hosts (9 adapters)
   mcp/        pure-Go handlers + Guard (panic / timeout / audit)
   daemon/     launchd plist / systemd unit templates for daemon mode
   ghaction/   workflow command emitter, path classifiers

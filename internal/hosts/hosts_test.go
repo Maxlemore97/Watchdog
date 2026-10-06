@@ -224,7 +224,7 @@ func TestAll_ListsKnownHosts(t *testing.T) {
 	for _, h := range got {
 		names = append(names, h.Name())
 	}
-	want := []string{"claude-desktop", "cursor", "continue", "cline", "zed"}
+	want := []string{"claude-desktop", "cursor", "continue", "cline", "zed", "vscode", "windsurf", "gemini-cli", "codex"}
 	if !reflect.DeepEqual(names, want) {
 		t.Errorf("All names = %v, want %v", names, want)
 	}

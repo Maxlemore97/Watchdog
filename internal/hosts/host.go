@@ -50,6 +50,10 @@ func All() []Host {
 		NewContinue(),
 		NewCline(),
 		NewZed(),
+		NewVSCode(),
+		NewWindsurf(),
+		NewGeminiCLI(),
+		NewCodex(),
 	}
 }
 

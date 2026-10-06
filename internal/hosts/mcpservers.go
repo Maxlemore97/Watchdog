@@ -171,11 +171,28 @@ func (h *schemaHost) saveConfig(cfg map[string]any) error {
 	if err != nil {
 		return err
 	}
-	tmp := h.configPath + "." + strconv.Itoa(os.Getpid()) + ".tmp"
-	if err := os.WriteFile(tmp, data, 0o644); err != nil {
+	return writeAtomic(h.configPath, data)
+}
+
+// writeAtomic replaces path via temp + rename, keeping the existing
+// file's permission bits. Host configs often hold API keys in env
+// blocks; a user's 0600 must not silently become 0644. New files are
+// created 0600.
+func writeAtomic(path string, data []byte) error {
+	mode := os.FileMode(0o600)
+	if st, err := os.Stat(path); err == nil {
+		mode = st.Mode().Perm()
+	}
+	tmp := path + "." + strconv.Itoa(os.Getpid()) + ".tmp"
+	if err := os.WriteFile(tmp, data, mode); err != nil {
 		return err
 	}
-	if err := os.Rename(tmp, h.configPath); err != nil {
+	// WriteFile applies the umask; set the mode explicitly.
+	if err := os.Chmod(tmp, mode); err != nil {
+		_ = os.Remove(tmp)
+		return err
+	}
+	if err := os.Rename(tmp, path); err != nil {
 		_ = os.Remove(tmp)
 		return err
 	}
