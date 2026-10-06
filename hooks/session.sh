@@ -1,5 +1,7 @@
 #!/usr/bin/env bash
 # Watchdog SessionStart hook wrapper.
+# No pipefail: `printf | grep -q` would report SIGPIPE on an early
+# match and turn a detected install into a pass-through.
 set -eu
 
 # shellcheck source-path=SCRIPTDIR

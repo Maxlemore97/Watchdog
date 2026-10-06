@@ -9,6 +9,8 @@
 # screening by deleting the binary.
 #
 # Clean-uninstall path: binary missing AND no manifest → exit 0.
+# No pipefail: `printf | grep -q` would report SIGPIPE on an early
+# match and turn a detected install into a pass-through.
 set -eu
 
 # shellcheck source-path=SCRIPTDIR
@@ -32,7 +34,7 @@ input=$(cat)
 # If python3 is missing we fall back to scanning the whole payload —
 # the prompt hook's regex is narrow enough (`/plugin install <arg>`)
 # that prose false positives are rare.
-prompt=$(extract_json_field "$input" "d.get('prompt','')" || true)
+prompt=$(extract_json_field "$input" "prompt" || true)
 if [ -z "$prompt" ]; then
   prompt="$input"
 fi

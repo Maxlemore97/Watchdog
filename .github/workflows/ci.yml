@@ -77,7 +77,7 @@ jobs:
         # those directives. With both, hooks/*.sh can `source
         # lib/resolve.sh` and shellcheck resolves it to
         # hooks/lib/resolve.sh regardless of CWD.
-        run: shellcheck -x -P hooks install.sh hooks/*.sh
+        run: shellcheck -x -P hooks install.sh hooks/*.sh hooks/lib/*.sh bin/*
 
   fuzz:
     name: parser fuzz (smoke)

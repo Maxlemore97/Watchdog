@@ -5,7 +5,7 @@
 # hook shells, but those shells do not source ~/.zshrc, so the real
 # binary installed under ~/.local/bin would otherwise be invisible.
 # This shim bridges the gap.
-set -e
+set -euo pipefail
 
 name="$(basename "$0")"
 self="$(cd "$(dirname "$0")" && pwd)/$name"

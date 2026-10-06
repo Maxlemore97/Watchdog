@@ -2,6 +2,7 @@ package shim
 
 import (
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -294,5 +295,37 @@ func TestWindowsWrapperOnWindows(t *testing.T) {
 	}
 	if !hasCmd {
 		t.Error("Windows install should write .cmd wrapper")
+	}
+}
+
+// A hostile install path must reach exec as one literal argument and
+// never be evaluated by the wrapper's shell.
+func TestRenderWrapper_QuotesExecPath(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("posix wrapper")
+	}
+	dir := t.TempDir()
+	marker := filepath.Join(dir, "pwned")
+	hostile := filepath.Join(dir, `we"ird $(touch `+marker+`) `+"`id`"+` it's`, "watchdog-shim-exec")
+	wrapper := filepath.Join(dir, "npm")
+	if err := os.WriteFile(wrapper, []byte(renderWrapper(wrapper, "npm", hostile)), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	out, _ := exec.Command("bash", wrapper, "install").CombinedOutput()
+	if _, err := os.Stat(marker); err == nil {
+		t.Fatalf("wrapper evaluated the exec path:\n%s", renderWrapper(wrapper, "npm", hostile))
+	}
+	// exec fails (path does not exist) but must name the literal path.
+	if !strings.Contains(string(out), "touch") {
+		t.Errorf("exec did not receive the literal path; output: %s", out)
+	}
+	if got := renderWrapper(wrapper, "npm", "/home/u/.local/bin/watchdog-shim-exec"); !strings.Contains(got, `exec "/home/u/.local/bin/watchdog-shim-exec" "npm" "$@"`) {
+		t.Errorf("plain paths should keep the double-quoted form:\n%s", got)
+	}
+}
+
+func TestCmdQuote_EscapesPercent(t *testing.T) {
+	if got := CmdQuote(`C:\Users\a%PATH%b\x.exe`); got != `"C:\Users\a%%PATH%%b\x.exe"` {
+		t.Errorf("CmdQuote = %s", got)
 	}
 }
