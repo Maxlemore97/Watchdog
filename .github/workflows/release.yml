@@ -4,25 +4,35 @@ on:
   push:
     tags: ["v*"]
 
+# contents: write publishes the GitHub release; id-token + attestations
+# let the job sign SLSA build provenance via Sigstore (keyless).
 permissions:
   contents: write
+  id-token: write
+  attestations: write
 
 jobs:
   goreleaser:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
-      - uses: actions/setup-go@v5
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version: "1.26"
           # Runner images cache an older patch release; always pull the
           # newest so stdlib security fixes land in tests and binaries.
           check-latest: true
-      - uses: goreleaser/goreleaser-action@v6
+      - uses: goreleaser/goreleaser-action@f06c13b6b1a9625abc9e6e439d9c05a8f2190e94 # v7.2.3
         with:
           version: "~> v2"
           args: release --clean
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      # Provenance for every archive listed in checksums.txt. Verify a
+      # download with: gh attestation verify <file> --repo Maxlemore97/Watchdog
+      - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-checksums: dist/checksums.txt

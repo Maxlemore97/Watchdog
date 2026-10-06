@@ -32,27 +32,27 @@ import (
 // (recursion guard, opt-in event log) and threading them adds noise
 // without value.
 type Config struct {
-	Mode             string        // WATCHDOG_MODE — both/osv/claude
-	MinSeverity      string        // WATCHDOG_MIN_SEVERITY — none/low/medium/high/critical
-	FailClosedVerdict string       // WATCHDOG_FAILCLOSED_VERDICT — allow/ask/deny (verdict when OSV unreachable / LLM CLI missing / analyzer error)
-	MaxPackages      int           // WATCHDOG_MAX_PACKAGES
-	LLMProvider      string        // WATCHDOG_LLM_PROVIDER
-	LLMModel         string        // WATCHDOG_LLM_MODEL
-	LLMBin           string        // WATCHDOG_LLM_BIN
-	LLMCmd           string        // WATCHDOG_LLM_CMD
-	LLMAppendSystem  bool          // WATCHDOG_LLM_APPEND_SYSTEM
-	LLMTimeout       time.Duration // WATCHDOG_LLM_TIMEOUT (secs)
-	CacheDir         string        // WATCHDOG_CACHE_DIR
-	CacheTTL         time.Duration // WATCHDOG_CACHE_TTL (secs)
-	LLMCacheTTL      time.Duration // WATCHDOG_LLM_CACHE_TTL (secs)
-	HookBudget       time.Duration // WATCHDOG_HOOK_BUDGET_SECS
-	SessionMaxScans  int           // WATCHDOG_SESSION_MAX_SCANS
-	ActionFailOn     string        // WATCHDOG_ACTION_FAIL_ON — deny/ask/never
-	ResolveLatest    string        // WATCHDOG_RESOLVE_LATEST — auto/1/0
-	OSVEndpoint      string        // WATCHDOG_OSV_ENDPOINT
-	PluginDirs       string        // WATCHDOG_PLUGIN_DIRS
-	ShimDir          string        // WATCHDOG_SHIM_DIR
-	HeadRef          string        // WATCHDOG_HEAD_REF
+	Mode              string        // WATCHDOG_MODE — both/osv/claude
+	MinSeverity       string        // WATCHDOG_MIN_SEVERITY — none/low/medium/high/critical
+	FailClosedVerdict string        // WATCHDOG_FAILCLOSED_VERDICT — allow/ask/deny (verdict when OSV unreachable / LLM CLI missing / analyzer error)
+	MaxPackages       int           // WATCHDOG_MAX_PACKAGES
+	LLMProvider       string        // WATCHDOG_LLM_PROVIDER
+	LLMModel          string        // WATCHDOG_LLM_MODEL
+	LLMBin            string        // WATCHDOG_LLM_BIN
+	LLMCmd            string        // WATCHDOG_LLM_CMD
+	LLMAppendSystem   bool          // WATCHDOG_LLM_APPEND_SYSTEM
+	LLMTimeout        time.Duration // WATCHDOG_LLM_TIMEOUT (secs)
+	CacheDir          string        // WATCHDOG_CACHE_DIR
+	CacheTTL          time.Duration // WATCHDOG_CACHE_TTL (secs)
+	LLMCacheTTL       time.Duration // WATCHDOG_LLM_CACHE_TTL (secs)
+	HookBudget        time.Duration // WATCHDOG_HOOK_BUDGET_SECS
+	SessionMaxScans   int           // WATCHDOG_SESSION_MAX_SCANS
+	ActionFailOn      string        // WATCHDOG_ACTION_FAIL_ON — deny/ask/never
+	ResolveLatest     string        // WATCHDOG_RESOLVE_LATEST — auto/1/0
+	OSVEndpoint       string        // WATCHDOG_OSV_ENDPOINT
+	PluginDirs        string        // WATCHDOG_PLUGIN_DIRS
+	ShimDir           string        // WATCHDOG_SHIM_DIR
+	HeadRef           string        // WATCHDOG_HEAD_REF
 }
 
 var (
@@ -67,21 +67,21 @@ var (
 // first validation error. Does NOT mutate the process env.
 func Load() (Config, error) {
 	c := Config{
-		Mode:            envLower("WATCHDOG_MODE", "both"),
-		MinSeverity:     envLower("WATCHDOG_MIN_SEVERITY", "low"),
+		Mode:              envLower("WATCHDOG_MODE", "both"),
+		MinSeverity:       envLower("WATCHDOG_MIN_SEVERITY", "low"),
 		FailClosedVerdict: envLower("WATCHDOG_FAILCLOSED_VERDICT", ""),
-		LLMProvider:     envLower("WATCHDOG_LLM_PROVIDER", "auto"),
-		LLMModel:        strings.TrimSpace(os.Getenv("WATCHDOG_LLM_MODEL")),
-		LLMBin:          strings.TrimSpace(os.Getenv("WATCHDOG_LLM_BIN")),
-		LLMCmd:          os.Getenv("WATCHDOG_LLM_CMD"),
-		LLMAppendSystem: envBool("WATCHDOG_LLM_APPEND_SYSTEM", true),
-		ActionFailOn:    envLower("WATCHDOG_ACTION_FAIL_ON", "deny"),
-		ResolveLatest:   envLower("WATCHDOG_RESOLVE_LATEST", ""),
-		OSVEndpoint:     strings.TrimSpace(os.Getenv("WATCHDOG_OSV_ENDPOINT")),
-		CacheDir:        os.Getenv("WATCHDOG_CACHE_DIR"),
-		PluginDirs:      os.Getenv("WATCHDOG_PLUGIN_DIRS"),
-		ShimDir:         os.Getenv("WATCHDOG_SHIM_DIR"),
-		HeadRef:         os.Getenv("WATCHDOG_HEAD_REF"),
+		LLMProvider:       envLower("WATCHDOG_LLM_PROVIDER", "auto"),
+		LLMModel:          strings.TrimSpace(os.Getenv("WATCHDOG_LLM_MODEL")),
+		LLMBin:            strings.TrimSpace(os.Getenv("WATCHDOG_LLM_BIN")),
+		LLMCmd:            os.Getenv("WATCHDOG_LLM_CMD"),
+		LLMAppendSystem:   envBool("WATCHDOG_LLM_APPEND_SYSTEM", true),
+		ActionFailOn:      envLower("WATCHDOG_ACTION_FAIL_ON", "deny"),
+		ResolveLatest:     envLower("WATCHDOG_RESOLVE_LATEST", ""),
+		OSVEndpoint:       strings.TrimSpace(os.Getenv("WATCHDOG_OSV_ENDPOINT")),
+		CacheDir:          os.Getenv("WATCHDOG_CACHE_DIR"),
+		PluginDirs:        os.Getenv("WATCHDOG_PLUGIN_DIRS"),
+		ShimDir:           os.Getenv("WATCHDOG_SHIM_DIR"),
+		HeadRef:           os.Getenv("WATCHDOG_HEAD_REF"),
 	}
 
 	var err error

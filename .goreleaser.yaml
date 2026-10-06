@@ -4,7 +4,9 @@ project_name: watchdog
 
 before:
   hooks:
-    - go mod tidy
+    # Verify, never rewrite: a release must build exactly the reviewed
+    # go.mod/go.sum.
+    - go mod verify
 
 builds:
   - id: watchdog-pretool

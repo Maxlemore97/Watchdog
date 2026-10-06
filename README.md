@@ -114,7 +114,7 @@ Installs all eight binaries under `$(go env GOPATH)/bin`. Make sure that's on yo
 
 ### D. Release tarball
 
-For air-gapped or locked-down machines. Grab the archive for your platform from [Releases](https://github.com/Maxlemore97/Watchdog/releases), check `checksums.txt`, extract, and copy the binaries somewhere on your PATH.
+For air-gapped or locked-down machines. Grab the archive for your platform from [Releases](https://github.com/Maxlemore97/Watchdog/releases), check `checksums.txt`, extract, and copy the binaries somewhere on your PATH. Releases carry signed SLSA build provenance; verify an archive with `gh attestation verify <archive> --repo Maxlemore97/Watchdog`. Unlike `checksums.txt`, which comes from the same place as the archives, the attestation proves the file was built by this repository's release workflow.
 
 ---
 

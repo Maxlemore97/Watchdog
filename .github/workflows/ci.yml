@@ -5,12 +5,19 @@ on:
     branches: [main]
   pull_request:
 
+# Least privilege: CI only reads the repository.
+permissions:
+  contents: read
+
 # Cancel in-flight runs when a new commit lands on the same ref so
 # we don't burn CI minutes on stale revisions.
 concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
 
+# Third-party actions are pinned to full commit SHAs (tag in the
+# trailing comment) so a moved or compromised tag cannot change what
+# runs here. Bump them together with the comment.
 jobs:
   test:
     name: test (${{ matrix.os }} / go${{ matrix.go }})
@@ -21,8 +28,10 @@ jobs:
         os: [ubuntu-latest, macos-latest, windows-latest]
         go: ["1.25", "1.26"]
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version: ${{ matrix.go }}
           # Runner images cache an older patch release; always pull the
@@ -33,36 +42,42 @@ jobs:
       - name: test
         run: go test -race -count=1 ./...
 
-  vet:
-    name: go vet + staticcheck
+  lint:
+    name: gofmt + go vet + staticcheck + govulncheck
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          go-version: "1.25"
-          # Runner images cache an older patch release; always pull the
-          # newest so stdlib security fixes land in tests and binaries.
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: "1.26"
           check-latest: true
+      - name: gofmt
+        run: |
+          unformatted="$(gofmt -l .)"
+          if [ -n "$unformatted" ]; then
+            echo "gofmt needed on:"; echo "$unformatted"; exit 1
+          fi
       - run: go vet ./...
-      - uses: dominikh/staticcheck-action@v1
-        with:
-          version: latest
-          install-go: false
-        continue-on-error: true
+      # Pinned module versions, verified against the Go checksum DB.
+      - name: staticcheck
+        run: go run honnef.co/go/tools/cmd/staticcheck@v0.8.1 ./...
+      - name: govulncheck
+        run: go run golang.org/x/vuln/cmd/govulncheck@v1.8.0 ./...
 
   goreleaser-check:
     name: goreleaser config valid
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          go-version: "1.25"
-          # Runner images cache an older patch release; always pull the
-          # newest so stdlib security fixes land in tests and binaries.
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: "1.26"
           check-latest: true
-      - uses: goreleaser/goreleaser-action@v6
+      - uses: goreleaser/goreleaser-action@f06c13b6b1a9625abc9e6e439d9c05a8f2190e94 # v7.2.3
         with:
           version: "~> v2"
           args: check
@@ -71,7 +86,9 @@ jobs:
     name: shellcheck install + hook scripts
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - name: shellcheck
         # -x follows `source` directives; -P sets the search path for
         # those directives. With both, hooks/*.sh can `source
@@ -79,17 +96,40 @@ jobs:
         # hooks/lib/resolve.sh regardless of CWD.
         run: shellcheck -x -P hooks install.sh hooks/*.sh hooks/lib/*.sh bin/*
 
+  plugin-validate:
+    name: claude plugin manifest
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: validate plugin.json and marketplace.json
+        run: |
+          python3 -I - <<'PY'
+          import json, sys
+          for p in (".claude-plugin/plugin.json", ".claude-plugin/marketplace.json"):
+              json.load(open(p))
+          hooks = json.load(open(".claude-plugin/plugin.json"))["hooks"]
+          for event, entries in hooks.items():
+              for entry in entries:
+                  for h in entry["hooks"]:
+                      cmd = h["command"]
+                      if "${CLAUDE_PLUGIN_ROOT}" in cmd and not cmd.startswith('"'):
+                          sys.exit(f"{event}: unquoted CLAUDE_PLUGIN_ROOT in {cmd!r}")
+          print("ok")
+          PY
+
   fuzz:
     name: parser fuzz (smoke)
     runs-on: ubuntu-latest
     continue-on-error: true
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          go-version: "1.25"
-          # Runner images cache an older patch release; always pull the
-          # newest so stdlib security fixes land in tests and binaries.
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: "1.26"
           check-latest: true
       - name: FuzzTokenize
         run: go test -run=^$ -fuzz=FuzzTokenize -fuzztime=60s ./internal/parsers
