@@ -3,6 +3,7 @@ package integrity
 import (
 	"crypto/ed25519"
 	"crypto/rand"
+	"encoding/base64"
 	"os"
 	"runtime"
 	"testing"
@@ -97,8 +98,18 @@ func TestVerifyBytes_RejectsTamperedMessage(t *testing.T) {
 func TestVerifyBytes_RejectsTamperedSignature(t *testing.T) {
 	pub, priv, _ := ed25519.GenerateKey(rand.Reader)
 	sig := SignBytes(priv, []byte("msg"))
-	// Flip a bit in the base64 by swapping two characters.
-	tampered := "A" + sig[1:]
+	// Flip one bit of the decoded signature. (Replacing the first
+	// base64 char with a fixed letter was a no-op whenever the
+	// signature already started with it — a 1-in-64 flake.)
+	raw, err := base64.StdEncoding.DecodeString(sig)
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw[0] ^= 0x01
+	tampered := base64.StdEncoding.EncodeToString(raw)
+	if tampered == sig {
+		t.Fatal("tampering produced an identical signature")
+	}
 	if err := VerifyBytes(pub, []byte("msg"), tampered); err == nil {
 		t.Error("verify accepted tampered signature")
 	}
