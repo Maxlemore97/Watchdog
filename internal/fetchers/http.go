@@ -6,11 +6,17 @@ package fetchers
 
 import (
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
+	"path"
+	"slices"
 	"strconv"
+	"strings"
 	"time"
+	"unicode/utf8"
 
+	"github.com/Maxlemore97/watchdog/internal/types"
 	"github.com/Maxlemore97/watchdog/internal/urlenc"
 )
 
@@ -20,6 +26,9 @@ const (
 	MaxFileBytes     = 10_000
 	MaxBundleBytes   = 50_000
 	MaxDownloadBytes = 5_000_000
+	// MaxManifestBytes caps manifests that must be parsed whole
+	// (npm package.json) to extract install scripts.
+	MaxManifestBytes = 1_000_000
 )
 
 // httpGet / httpGetJSON are package-level vars so unit tests in this
@@ -91,10 +100,26 @@ func truncateString(text string, limit int) string {
 type orderedFiles struct {
 	order []string
 	data  map[string]string
+	// autoExec marks keys that run without the agent choosing to,
+	// beyond what the path alone reveals (e.g. a script referenced
+	// from a hook command).
+	autoExec map[string]bool
 }
 
 func newOrderedFiles() *orderedFiles {
-	return &orderedFiles{data: map[string]string{}}
+	return &orderedFiles{data: map[string]string{}, autoExec: map[string]bool{}}
+}
+
+// tier ranks a key for bundle ordering: auto-executed surfaces first,
+// then other code, then documentation and manifests.
+func (o *orderedFiles) tier(key string) int {
+	if o.autoExec[key] || isAutoExecSurface(key) {
+		return tierAutoExec
+	}
+	if isCodeSurface(key) {
+		return tierCode
+	}
+	return tierOther
 }
 
 // set inserts or updates an entry. New keys preserve their first
@@ -135,34 +160,144 @@ func sortKeys(s []string) {
 	}
 }
 
-// fitBundle returns a map capped at MaxBundleBytes total. Iteration
-// order is `files.order` so callers control priority. Entries beyond
-// the cap are dropped silently.
+// fitBundle returns a map capped at MaxBundleBytes total. See
+// fitBundleReport for ordering and truncation accounting.
 func fitBundle(files *orderedFiles) map[string]string {
-	out := map[string]string{}
-	used := 0
+	out, _, _ := fitBundleReport(files)
+	return out
+}
+
+// fitBundleReport caps the bundle at MaxBundleBytes. Entries are placed
+// by tier — auto-executed surfaces, then other code, then docs and
+// manifests — keeping insertion order within a tier, so an attacker
+// cannot push a hook script out of view by shipping large
+// documentation files.
+//
+// truncatedAuto lists auto-executed surfaces the LLM will not see in
+// full (cut at MaxFileBytes, cut by the cap, or dropped).
+// truncatedOther counts every other entry that was cut or dropped.
+func fitBundleReport(files *orderedFiles) (out map[string]string, truncatedAuto []string, truncatedOther int) {
+	out = map[string]string{}
+	var byTier [3][]string
 	for _, name := range files.order {
+		t := files.tier(name)
+		byTier[t] = append(byTier[t], name)
+	}
+	markTruncated := func(name string) {
+		if files.tier(name) == tierAutoExec {
+			truncatedAuto = append(truncatedAuto, name)
+		} else {
+			truncatedOther++
+		}
+	}
+	used := 0
+	for _, name := range slices.Concat(byTier[0], byTier[1], byTier[2]) {
 		content, ok := files.data[name]
 		if !ok {
 			continue
 		}
+		if used >= MaxBundleBytes {
+			markTruncated(name)
+			continue
+		}
 		snippet := truncateString(content, MaxFileBytes)
+		cut := len(snippet) != len(content)
 		if used+len(snippet) > MaxBundleBytes {
-			remain := MaxBundleBytes - used
-			if remain < 0 {
-				remain = 0
-			}
-			if remain >= len(snippet) {
-				snippet = snippet[:remain]
-			} else {
-				snippet = snippet[:remain] + "\n... [bundle cap reached]"
-			}
+			snippet = truncateUTF8(snippet, MaxBundleBytes-used) + "\n... [bundle cap reached]"
+			cut = true
+		}
+		if cut {
+			markTruncated(name)
 		}
 		out[name] = snippet
 		used += len(snippet)
-		if used >= MaxBundleBytes {
-			break
+	}
+	return out, truncatedAuto, truncatedOther
+}
+
+// truncateUTF8 returns at most n bytes of s without splitting a rune.
+func truncateUTF8(s string, n int) string {
+	if n <= 0 {
+		return ""
+	}
+	if len(s) <= n {
+		return s
+	}
+	for n > 0 && !utf8.RuneStart(s[n]) {
+		n--
+	}
+	return s[:n]
+}
+
+const (
+	tierAutoExec = iota
+	tierCode
+	tierOther
+)
+
+// autoExecBasenames run on install, on session/tool events, or define
+// commands the host launches (MCP/LSP servers, hooks, monitors).
+var autoExecBasenames = map[string]bool{
+	"setup.py": true, "setup.cfg": true, "pyproject.toml": true, "build.rs": true,
+	"extconf.rb": true, "rakefile": true, "rakefile.rb": true,
+	"install.ps1": true, "init.ps1": true, "chocolateyinstall.ps1": true,
+	".mcp.json": true, ".lsp.json": true, "hooks.json": true, "plugin.json": true,
+	"settings.json": true, "monitors.json": true,
+}
+
+// autoExecDirs are plugin-root dirs whose contents run without the
+// agent deciding to: hook handlers, monitors, and bin/ (prepended to
+// the Bash tool's PATH, so it can shadow npm, git, …).
+var autoExecDirs = []string{"hooks/", "bin/", "monitors/"}
+
+var codeExts = map[string]bool{
+	".sh": true, ".bash": true, ".zsh": true, ".fish": true, ".py": true,
+	".js": true, ".mjs": true, ".cjs": true, ".ts": true, ".mts": true,
+	".rb": true, ".pl": true, ".php": true, ".ps1": true, ".psm1": true,
+	".bat": true, ".cmd": true, ".exe": true, ".lua": true,
+}
+
+// isAutoExecSurface reports whether a bundle key names content that
+// runs without the agent choosing to: package install scripts, hook,
+// MCP and LSP configs, and plugin hooks/, bin/, monitors/.
+func isAutoExecSurface(key string) bool {
+	if strings.HasSuffix(key, "#scripts") {
+		return true
+	}
+	low := strings.ToLower(key)
+	for _, d := range autoExecDirs {
+		if strings.HasPrefix(low, d) {
+			return true
 		}
 	}
-	return out
+	return autoExecBasenames[path.Base(low)]
+}
+
+// isCodeSurface reports whether a key is code the agent may run on
+// demand (skill scripts, helper sources). Such code still goes through
+// the Bash PreToolUse hook when invoked, so truncation only adds a
+// note rather than forcing `ask`.
+func isCodeSurface(key string) bool {
+	low := strings.ToLower(key)
+	if strings.HasPrefix(low, "scripts/") || strings.Contains(low, "/scripts/") {
+		return true
+	}
+	return codeExts[path.Ext(low)]
+}
+
+// finalizeFrom fits files into the bundle, records truncation and
+// stamps the content digest. The digest covers the full fetched
+// content, not just the bytes that survived the cap, so a change
+// hidden past the truncation point still invalidates cached verdicts.
+func finalizeFrom(files *orderedFiles, b *types.ArtifactBundle) *types.ArtifactBundle {
+	fitted, truncAuto, truncOther := fitBundleReport(files)
+	b.Files = fitted
+	b.TruncatedExecutable = truncAuto
+	if n := len(truncAuto) + truncOther; n > 0 {
+		b.Notes = append(b.Notes, fmt.Sprintf(
+			"bundle truncated: %d file(s) cut or dropped by size caps; auto-executed surfaces affected: [%s]",
+			n, strings.Join(truncAuto, ", ")))
+	}
+	b.UpstreamDigest = digestBundle(files.data)
+	return b
 }

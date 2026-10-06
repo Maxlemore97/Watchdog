@@ -18,7 +18,9 @@ import (
 // Members that fail any check are skipped silently — the caller sees
 // the curated subset without the hostile entries.
 func safeTarMember(h *tar.Header) bool {
-	if h.Typeflag != tar.TypeReg && h.Typeflag != tar.TypeRegA {
+	// tar.Reader already normalises the deprecated TypeRegA ('\x00')
+	// to TypeReg, so TypeReg alone covers both.
+	if h.Typeflag != tar.TypeReg {
 		return false
 	}
 	name := h.Name
@@ -60,6 +62,17 @@ func walkTar(
 	predicate func(name string, parts []string) bool,
 	keyFn func(name string, parts []string) string,
 ) (map[string]string, []string, error) {
+	return walkTarLimit(r, stripPackagePrefix, predicate, keyFn, MaxFileBytes*2)
+}
+
+// walkTarLimit is walkTar with an explicit per-member read cap.
+func walkTarLimit(
+	r io.Reader,
+	stripPackagePrefix bool,
+	predicate func(name string, parts []string) bool,
+	keyFn func(name string, parts []string) string,
+	limit int64,
+) (map[string]string, []string, error) {
 	tr := tar.NewReader(r)
 	out := map[string]string{}
 	var order []string
@@ -84,7 +97,7 @@ func walkTar(
 		if !predicate(h.Name, parts) {
 			continue
 		}
-		buf, err := io.ReadAll(io.LimitReader(tr, int64(MaxFileBytes*2)))
+		buf, err := io.ReadAll(io.LimitReader(tr, limit))
 		if err != nil {
 			continue
 		}

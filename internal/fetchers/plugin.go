@@ -15,7 +15,86 @@ import (
 	"github.com/Maxlemore97/watchdog/internal/types"
 )
 
-var pluginInterestingDirs = []string{"hooks", "commands", "skills", ".claude-plugin"}
+// pluginInterestingDirs are walked recursively. Executable surfaces
+// come first so they win the bundle-cap ordering tie-break; markdown
+// surfaces (commands, agents, skills, output styles) follow.
+var pluginInterestingDirs = []string{
+	".claude-plugin", "hooks", "bin", "scripts", "monitors",
+	"commands", "agents", "skills", "output-styles",
+}
+
+// pluginRootFiles are single files at the plugin root that Claude Code
+// (or the agent) loads: MCP and LSP server definitions run commands,
+// settings can register hooks, CLAUDE.md/AGENTS.md steer the agent.
+var pluginRootFiles = []string{
+	"plugin.json", ".mcp.json", ".lsp.json", "settings.json", "hooks.json",
+	"CLAUDE.md", "AGENTS.md",
+}
+
+// pluginRootRefRE finds files a hook/MCP config points at via
+// ${CLAUDE_PLUGIN_ROOT}/path — e.g. a harmless-looking hooks.json
+// whose command is `${CLAUDE_PLUGIN_ROOT}/lib/payload.sh`.
+var pluginRootRefRE = regexp.MustCompile(`\$\{?CLAUDE_PLUGIN_ROOT\}?[/\\]([A-Za-z0-9._\-/\\]+)`)
+
+// collectPluginFiles curates a plugin directory into an ordered file
+// set: the interesting dirs, root files, and any file referenced via
+// ${CLAUDE_PLUGIN_ROOT}. Symlinks, non-regular files and paths that
+// escape root are skipped.
+func collectPluginFiles(root string) *orderedFiles {
+	files := newOrderedFiles()
+	// add stores p and returns its bundle key ("" when skipped).
+	add := func(p string) string {
+		lst, err := os.Lstat(p)
+		if err != nil || lst.Mode()&os.ModeSymlink != 0 || !lst.Mode().IsRegular() {
+			return ""
+		}
+		rel, err := filepath.Rel(root, p)
+		if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+			return ""
+		}
+		key := filepath.ToSlash(rel)
+		if _, seen := files.data[key]; seen {
+			return key
+		}
+		content, err := readSmallFile(p)
+		if err != nil {
+			return ""
+		}
+		files.set(key, content)
+		return key
+	}
+	for _, sub := range pluginInterestingDirs {
+		dir := filepath.Join(root, sub)
+		st, err := os.Lstat(dir)
+		if err != nil || !st.IsDir() {
+			continue
+		}
+		_ = filepath.WalkDir(dir, func(p string, d fs.DirEntry, err error) error {
+			if err != nil || d.IsDir() {
+				return nil
+			}
+			_ = add(p)
+			return nil
+		})
+	}
+	for _, name := range pluginRootFiles {
+		_ = add(filepath.Join(root, name))
+	}
+	// Resolve ${CLAUDE_PLUGIN_ROOT} references transitively: files
+	// added here are appended to files.order and scanned in turn.
+	// Bounded so a reference cycle or a huge tree cannot spin.
+	for i := 0; i < len(files.order) && i < 512; i++ {
+		for _, m := range pluginRootRefRE.FindAllStringSubmatch(files.data[files.order[i]], -1) {
+			ref := filepath.Clean(filepath.FromSlash(strings.ReplaceAll(m[1], "\\", "/")))
+			if key := add(filepath.Join(root, ref)); key != "" && files.tier(files.order[i]) == tierAutoExec {
+				// Referenced from a hook/MCP/bin surface → runs
+				// automatically too.
+				files.autoExec[key] = true
+			}
+		}
+	}
+	return files
+}
 
 var gitURLRE = regexp.MustCompile(`^(https://|git@|ssh://)`)
 
@@ -85,7 +164,6 @@ func FetchPluginGit(gitURL, ref string) *types.ArtifactBundle {
 	defer os.RemoveAll(tmp)
 
 	notes := []string{}
-	files := newOrderedFiles()
 
 	args := []string{"clone", "--depth=1", "--filter=blob:none"}
 	if ref != "" {
@@ -110,47 +188,7 @@ func FetchPluginGit(gitURL, ref string) *types.ArtifactBundle {
 		})
 	}
 
-	for _, sub := range pluginInterestingDirs {
-		root := filepath.Join(tmp, sub)
-		info, err := os.Stat(root)
-		if err != nil || !info.IsDir() {
-			continue
-		}
-		_ = filepath.WalkDir(root, func(p string, d fs.DirEntry, err error) error {
-			if err != nil || d.IsDir() {
-				return nil
-			}
-			st, err := os.Lstat(p)
-			if err != nil {
-				return nil
-			}
-			if st.Mode()&os.ModeSymlink != 0 {
-				return nil
-			}
-			if !st.Mode().IsRegular() {
-				return nil
-			}
-			content, err := readSmallFile(p)
-			if err != nil {
-				return nil
-			}
-			rel, err := filepath.Rel(tmp, p)
-			if err != nil {
-				return nil
-			}
-			files.set(filepath.ToSlash(rel), content)
-			return nil
-		})
-	}
-
-	// Root-level plugin.json — must not be a symlink.
-	rootManifest := filepath.Join(tmp, "plugin.json")
-	if st, err := os.Lstat(rootManifest); err == nil &&
-		st.Mode().IsRegular() && st.Mode()&os.ModeSymlink == 0 {
-		if content, err := readSmallFile(rootManifest); err == nil {
-			files.set("plugin.json", content)
-		}
-	}
+	files := collectPluginFiles(tmp)
 
 	metadata := map[string]any{}
 	for _, key := range []string{"plugin.json", ".claude-plugin/plugin.json"} {
@@ -165,11 +203,10 @@ func FetchPluginGit(gitURL, ref string) *types.ArtifactBundle {
 		}
 	}
 
-	return finalize(&types.ArtifactBundle{
+	return finalizeFrom(files, &types.ArtifactBundle{
 		Ecosystem: "plugin",
 		Name:      gitURL,
 		Version:   ref,
-		Files:     fitBundle(files),
 		Metadata:  metadata,
 		Notes:     notes,
 	})
@@ -182,49 +219,8 @@ func FetchPluginLocal(name, dir string) *types.ArtifactBundle {
 	if err != nil || !info.IsDir() {
 		return nil
 	}
-	files := newOrderedFiles()
 	notes := []string{}
-
-	for _, sub := range pluginInterestingDirs {
-		root := filepath.Join(dir, sub)
-		st, err := os.Stat(root)
-		if err != nil || !st.IsDir() {
-			continue
-		}
-		_ = filepath.WalkDir(root, func(p string, d fs.DirEntry, err error) error {
-			if err != nil || d.IsDir() {
-				return nil
-			}
-			lst, err := os.Lstat(p)
-			if err != nil {
-				return nil
-			}
-			if lst.Mode()&os.ModeSymlink != 0 || !lst.Mode().IsRegular() {
-				return nil
-			}
-			content, err := readSmallFile(p)
-			if err != nil {
-				return nil
-			}
-			rel, err := filepath.Rel(dir, p)
-			if err != nil {
-				return nil
-			}
-			files.set(filepath.ToSlash(rel), content)
-			return nil
-		})
-	}
-
-	for _, candidate := range []string{"plugin.json", ".claude-plugin/plugin.json"} {
-		path := filepath.Join(dir, candidate)
-		lst, err := os.Lstat(path)
-		if err != nil || lst.Mode()&os.ModeSymlink != 0 || !lst.Mode().IsRegular() {
-			continue
-		}
-		if content, err := readSmallFile(path); err == nil {
-			files.set(candidate, content)
-		}
-	}
+	files := collectPluginFiles(dir)
 
 	metadata := map[string]any{"local": true, "path": dir}
 	for _, key := range []string{".claude-plugin/plugin.json", "plugin.json"} {
@@ -243,11 +239,10 @@ func FetchPluginLocal(name, dir string) *types.ArtifactBundle {
 	if v, ok := metadata["version"].(string); ok {
 		version = v
 	}
-	return finalize(&types.ArtifactBundle{
+	return finalizeFrom(files, &types.ArtifactBundle{
 		Ecosystem: "plugin",
 		Name:      name,
 		Version:   version,
-		Files:     fitBundle(files),
 		Metadata:  metadata,
 		Notes:     notes,
 	})
