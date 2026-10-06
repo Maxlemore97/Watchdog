@@ -19,13 +19,13 @@ func buildTar(t *testing.T, members []tar.Header, bodies map[string]string) []by
 	for i := range members {
 		h := members[i]
 		body := bodies[h.Name]
-		if h.Typeflag == tar.TypeReg || h.Typeflag == tar.TypeRegA {
+		if h.Typeflag == tar.TypeReg {
 			h.Size = int64(len(body))
 		}
 		if err := tw.WriteHeader(&h); err != nil {
 			t.Fatalf("write header %q: %v", h.Name, err)
 		}
-		if h.Typeflag == tar.TypeReg || h.Typeflag == tar.TypeRegA {
+		if h.Typeflag == tar.TypeReg {
 			if _, err := tw.Write([]byte(body)); err != nil {
 				t.Fatalf("write body %q: %v", h.Name, err)
 			}

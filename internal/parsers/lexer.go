@@ -24,6 +24,9 @@ func Tokenize(s string) ([]string, error) {
 	for i := 0; i < len(runes); i++ {
 		c := runes[i]
 		switch {
+		case c == '\\' && !inSingle && i+1 < len(runes) && runes[i+1] == '\n':
+			// Line continuation: backslash-newline is removed entirely.
+			i++
 		case c == '\\' && !inSingle && i+1 < len(runes):
 			i++
 			cur.WriteRune(runes[i])
@@ -54,10 +57,11 @@ func Tokenize(s string) ([]string, error) {
 	return tokens, nil
 }
 
-// SplitOnOperators splits cmd on top-level shell operators (&&, ||, ;)
-// while respecting quoting. Other operators (|, &) and version
-// specifiers (<, >) are preserved within their segments. Falls back to
-// a naive split if tokenization fails (e.g. unbalanced quotes).
+// SplitOnOperators splits cmd on top-level shell control operators
+// (&&, ||, ;, |, |&, & and newline) while respecting quoting.
+// Redirections (`2>&1`) and version specifiers (<, >) stay within their
+// segments. Falls back to a naive split if tokenization fails (e.g.
+// unbalanced quotes).
 func SplitOnOperators(cmd string) []string {
 	tokens, ops, err := tokenizeWithOps(cmd)
 	if err != nil {
@@ -75,12 +79,10 @@ func SplitOnOperators(cmd string) []string {
 	segments := [][]string{{}}
 	for i, tok := range tokens {
 		if ops[i] {
-			if tok == "&&" || tok == "||" || tok == ";" {
-				segments = append(segments, []string{})
-				continue
-			}
-			// |, & — kept inside segment as their own token
-			segments[len(segments)-1] = append(segments[len(segments)-1], tok)
+			// Every control operator starts a new command: the right
+			// side of a pipe or a backgrounded `&` runs just like the
+			// right side of `&&`.
+			segments = append(segments, []string{})
 			continue
 		}
 		segments[len(segments)-1] = append(segments[len(segments)-1], tok)
@@ -116,6 +118,9 @@ func tokenizeWithOps(s string) ([]string, []bool, error) {
 	for i := 0; i < len(runes); i++ {
 		c := runes[i]
 		switch {
+		case c == '\\' && !inSingle && i+1 < len(runes) && runes[i+1] == '\n':
+			// Line continuation: backslash-newline is removed entirely.
+			i++
 		case c == '\\' && !inSingle && i+1 < len(runes):
 			i++
 			cur.WriteRune(runes[i])
@@ -126,17 +131,28 @@ func tokenizeWithOps(s string) ([]string, []bool, error) {
 		case c == '\'' && !inDouble:
 			inSingle = !inSingle
 			hasToken = true
-		case !inSingle && !inDouble && (c == '&' || c == '|' || c == ';'):
+		case !inSingle && !inDouble && isRedirectAmp(runes, i, cur.String()):
+			// `2>&1`, `&>file`, `>|file`: part of a redirection, not
+			// a control operator.
+			cur.WriteRune(c)
+			hasToken = true
+		case !inSingle && !inDouble && (c == '&' || c == '|' || c == ';' || c == '\n'):
 			flush()
-			// Read whole operator (&&, ||, &, |, ;)
+			// Read whole operator (&&, ||, |&, &, |, ;). A newline
+			// separates commands exactly like `;`.
 			op := string(c)
-			if i+1 < len(runes) && runes[i+1] == c && (c == '&' || c == '|') {
+			if c == '\n' {
+				op = ";"
+			} else if i+1 < len(runes) && runes[i+1] == c && (c == '&' || c == '|') {
 				op = string(c) + string(c)
+				i++
+			} else if c == '|' && i+1 < len(runes) && runes[i+1] == '&' {
+				op = "|&"
 				i++
 			}
 			tokens = append(tokens, op)
 			isOp = append(isOp, true)
-		case (c == ' ' || c == '\t' || c == '\n') && !inSingle && !inDouble:
+		case (c == ' ' || c == '\t' || c == '\r') && !inSingle && !inDouble:
 			flush()
 		default:
 			cur.WriteRune(c)
@@ -150,6 +166,25 @@ func tokenizeWithOps(s string) ([]string, []bool, error) {
 	return tokens, isOp, nil
 }
 
+// isRedirectAmp reports whether the `&` or `|` at runes[i] belongs to
+// a redirection (`>&`, `<&`, `&>`, `>|`) rather than being a control
+// operator. cur is the token accumulated so far.
+func isRedirectAmp(runes []rune, i int, cur string) bool {
+	c := runes[i]
+	prevRedir := strings.HasSuffix(cur, ">") || strings.HasSuffix(cur, "<")
+	switch c {
+	case '&':
+		if prevRedir {
+			return true
+		}
+		// `&>file` / `&>>file`, but not `&&`.
+		return i+1 < len(runes) && runes[i+1] == '>'
+	case '|':
+		return strings.HasSuffix(cur, ">") // `>|` noclobber override
+	}
+	return false
+}
+
 func splitNaive(s string) []string {
 	// Split on && || ;
 	var out []string
@@ -157,15 +192,17 @@ func splitNaive(s string) []string {
 	runes := []rune(s)
 	for i := 0; i < len(runes); i++ {
 		c := runes[i]
-		if c == ';' {
+		if c == ';' || c == '\n' {
 			out = append(out, cur.String())
 			cur.Reset()
 			continue
 		}
-		if (c == '&' || c == '|') && i+1 < len(runes) && runes[i+1] == c {
+		if c == '&' || c == '|' {
 			out = append(out, cur.String())
 			cur.Reset()
-			i++
+			if i+1 < len(runes) && (runes[i+1] == c || runes[i+1] == '&') {
+				i++
+			}
 			continue
 		}
 		cur.WriteRune(c)
@@ -188,7 +225,7 @@ func JoinShell(tokens []string) string {
 }
 
 // ShellQuote single-quotes a token using POSIX rules. Empty string
-// becomes ''. A token containing only safe chars (alphanumerics and
+// becomes ”. A token containing only safe chars (alphanumerics and
 // a small allowlist) is returned unquoted.
 func ShellQuote(s string) string {
 	if s == "" {
@@ -219,8 +256,7 @@ func IsShellSafe(s string) bool {
 	return true
 }
 
-// joinShell / shellQuote keep the lowercase names available for
+// joinShell keeps the lowercase name available for
 // internal callers (SplitOnOperators) without churn. They forward to
 // the exported variants so behavior stays single-sourced.
 func joinShell(tokens []string) string { return JoinShell(tokens) }
-func shellQuote(s string) string       { return ShellQuote(s) }

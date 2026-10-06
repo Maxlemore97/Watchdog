@@ -25,6 +25,9 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version: ${{ matrix.go }}
+          # Runner images cache an older patch release; always pull the
+          # newest so stdlib security fixes land in tests and binaries.
+          check-latest: true
       - name: build
         run: go build ./...
       - name: test
@@ -38,6 +41,9 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version: "1.25"
+          # Runner images cache an older patch release; always pull the
+          # newest so stdlib security fixes land in tests and binaries.
+          check-latest: true
       - run: go vet ./...
       - uses: dominikh/staticcheck-action@v1
         with:
@@ -53,6 +59,9 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version: "1.25"
+          # Runner images cache an older patch release; always pull the
+          # newest so stdlib security fixes land in tests and binaries.
+          check-latest: true
       - uses: goreleaser/goreleaser-action@v6
         with:
           version: "~> v2"
@@ -79,6 +88,9 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version: "1.25"
+          # Runner images cache an older patch release; always pull the
+          # newest so stdlib security fixes land in tests and binaries.
+          check-latest: true
       - name: FuzzTokenize
         run: go test -run=^$ -fuzz=FuzzTokenize -fuzztime=60s ./internal/parsers
       - name: FuzzSplitOnOperators

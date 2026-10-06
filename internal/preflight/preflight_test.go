@@ -68,6 +68,29 @@ func TestPackages_Clean(t *testing.T) {
 	}
 }
 
+// A clean package must not launder an unvetted input riding along in
+// the same command (`pip install requests -r evil.txt`).
+func TestPackages_CleanPackagePlusNoteAsks(t *testing.T) {
+	for _, analyzerVerdict := range []map[string]any{
+		nil,
+		{"verdict": "allow", "reason": "fine"},
+	} {
+		restore := withStubs(t,
+			stubOK,
+			func(eco, name, ver string) map[string]any { return analyzerVerdict },
+		)
+		r := Packages([]types.Package{pkg("requests", "2")},
+			[]string{"requirements file: evil.txt"}, Options{Mode: "both"})
+		restore()
+		if r.Verdict != "ask" {
+			t.Errorf("clean pkg + note (analyzer=%v) = %q reason=%q, want ask", analyzerVerdict, r.Verdict, r.Reason)
+		}
+		if !strings.Contains(r.Reason, "evil.txt") {
+			t.Errorf("reason should name the unvetted input: %q", r.Reason)
+		}
+	}
+}
+
 func TestPackages_OSVHitDenies(t *testing.T) {
 	vuln := map[string]any{
 		"id":                "GHSA-x",
@@ -339,7 +362,6 @@ func TestPackages_FindingsIncludeOSVAboveThreshold(t *testing.T) {
 		t.Errorf("findings = %v", r.Findings)
 	}
 }
-
 
 // ---------- edge paths ------------------------------------------
 

@@ -67,11 +67,10 @@ func FetchHomebrew(name, version string) *types.ArtifactBundle {
 		"dependencies": meta["dependencies"],
 		"caveats":      meta["caveats"],
 	}
-	return finalize(&types.ArtifactBundle{
+	return finalizeFrom(files, &types.ArtifactBundle{
 		Ecosystem: "Homebrew",
 		Name:      name,
 		Version:   chosenVersion,
-		Files:     fitBundle(files),
 		Metadata:  metaOut,
 		Notes:     notes,
 	})

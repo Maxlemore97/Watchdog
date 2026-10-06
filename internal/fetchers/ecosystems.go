@@ -51,9 +51,6 @@ func Fetch(ecosystem, name, version string) *types.ArtifactBundle {
 // (FetchPluginGit, FetchPluginLocal) keep full coverage because
 // markdown skills/commands/hooks have no equivalent CVE database.
 
-var npmInterestingNames = map[string]bool{
-	"package.json": true,
-}
 var npmScriptKeys = map[string]bool{
 	"preinstall": true, "install": true, "postinstall": true,
 	"prepare": true, "preuninstall": true,
@@ -100,52 +97,91 @@ func FetchNPM(name, version string) *types.ArtifactBundle {
 	files := newOrderedFiles()
 	notes := []string{}
 
-	// Insert risky-script entries FIRST so they survive the bundle
-	// cap even when the archive ships many large interesting files.
-	if scripts, ok := meta["scripts"].(map[string]any); ok {
-		risky := map[string]any{}
-		for k, v := range scripts {
-			if npmScriptKeys[strings.ToLower(k)] {
-				risky[k] = v
-			}
-		}
-		if len(risky) > 0 {
-			data, _ := json.MarshalIndent(risky, "", "  ")
-			files.set("package.json#scripts", string(data))
-		}
-	}
+	// npm runs lifecycle scripts from the package.json inside the
+	// tarball, not from the registry metadata. The two can disagree
+	// ("manifest confusion"), so the tarball copy is authoritative and
+	// the registry copy is only a fallback when the tarball is
+	// unavailable.
+	registryScripts := riskyNPMScripts(meta["scripts"])
 
 	dist, _ := meta["dist"].(map[string]any)
 	tarball, _ := dist["tarball"].(string)
+	tarballRead := false
 	if tarball != "" {
 		raw := httpGet(tarball)
 		if raw != nil {
-			extracted, order, err := readTarGzMembers(raw, true,
+			// Only the root package.json (`<topdir>/package.json`)
+			// drives lifecycle scripts; nested ones are inert and
+			// would only crowd the bundle.
+			extracted, _, err := readTarGzMembersLimit(raw, false,
 				func(name string, parts []string) bool {
-					leaf := strings.ToLower(parts[len(parts)-1])
-					return npmInterestingNames[leaf]
+					return len(parts) == 2 && strings.ToLower(parts[1]) == "package.json"
 				},
 				func(name string, parts []string) string {
-					return strings.Join(parts, "/")
-				})
+					return "package.json"
+				},
+				MaxManifestBytes)
 			if err != nil {
 				notes = append(notes, "tarball read failed: "+err.Error())
 			}
-			files.merge(extracted, order)
+			if pj, ok := extracted["package.json"]; ok {
+				tarballRead = true
+				var parsed map[string]any
+				if err := json.Unmarshal([]byte(pj), &parsed); err != nil {
+					// Unparseable manifest: npm would refuse it, but
+					// we cannot tell what it runs — make it visible
+					// and treat it as an executable surface.
+					notes = append(notes, "tarball package.json not parseable: "+err.Error())
+					files.set("package.json#scripts", pj)
+				} else {
+					tarScripts := riskyNPMScripts(parsed["scripts"])
+					if len(tarScripts) > 0 {
+						data, _ := json.MarshalIndent(tarScripts, "", "  ")
+						files.set("package.json#scripts", string(data))
+					}
+					if !sameJSON(tarScripts, registryScripts) {
+						notes = append(notes, "manifest confusion: install scripts in tarball package.json differ from registry metadata")
+					}
+				}
+				files.set("package.json", pj)
+			} else {
+				notes = append(notes, "tarball has no root package.json")
+			}
 		} else {
 			notes = append(notes, "tarball download failed")
 		}
 	}
+	if !tarballRead && len(registryScripts) > 0 {
+		data, _ := json.MarshalIndent(registryScripts, "", "  ")
+		files.set("package.json#scripts", string(data))
+	}
 
 	metaOut := assembleNPMMetadata(meta, version)
-	return finalize(&types.ArtifactBundle{
+	return finalizeFrom(files, &types.ArtifactBundle{
 		Ecosystem: "npm",
 		Name:      name,
 		Version:   asString(metaOut["version"]),
-		Files:     fitBundle(files),
 		Metadata:  metaOut,
 		Notes:     notes,
 	})
+}
+
+// riskyNPMScripts keeps the lifecycle scripts npm runs on install.
+func riskyNPMScripts(v any) map[string]any {
+	scripts, _ := v.(map[string]any)
+	risky := map[string]any{}
+	for k, s := range scripts {
+		if npmScriptKeys[strings.ToLower(k)] {
+			risky[k] = s
+		}
+	}
+	return risky
+}
+
+func sameJSON(a, b any) bool {
+	ja, errA := json.Marshal(a)
+	jb, errB := json.Marshal(b)
+	return errA == nil && errB == nil && string(ja) == string(jb)
 }
 
 // assembleNPMMetadata builds the curated metadata view from the raw
@@ -153,13 +189,13 @@ func FetchNPM(name, version string) *types.ArtifactBundle {
 // without standing up the full network fetch.
 func assembleNPMMetadata(meta map[string]any, version string) map[string]any {
 	return map[string]any{
-		"version":             firstString(meta["version"], version),
-		"author":              firstNonNil(meta["author"], meta["maintainers"]),
-		"license":             meta["license"],
-		"repository":          meta["repository"],
-		"homepage":            meta["homepage"],
-		"dependencies_count":  countDeps(meta["dependencies"]),
-		"description":         meta["description"],
+		"version":            firstString(meta["version"], version),
+		"author":             firstNonNil(meta["author"], meta["maintainers"]),
+		"license":            meta["license"],
+		"repository":         meta["repository"],
+		"homepage":           meta["homepage"],
+		"dependencies_count": countDeps(meta["dependencies"]),
+		"description":        meta["description"],
 	}
 }
 
@@ -224,19 +260,18 @@ func FetchPyPI(name, version string) *types.ArtifactBundle {
 	}
 
 	metaOut := map[string]any{
-		"version":       firstString(info["version"], version),
-		"author":        info["author"],
-		"author_email":  info["author_email"],
-		"license":       info["license"],
-		"summary":       info["summary"],
-		"home_page":     info["home_page"],
-		"project_urls":  info["project_urls"],
+		"version":      firstString(info["version"], version),
+		"author":       info["author"],
+		"author_email": info["author_email"],
+		"license":      info["license"],
+		"summary":      info["summary"],
+		"home_page":    info["home_page"],
+		"project_urls": info["project_urls"],
 	}
-	return finalize(&types.ArtifactBundle{
+	return finalizeFrom(files, &types.ArtifactBundle{
 		Ecosystem: "PyPI",
 		Name:      name,
 		Version:   asString(metaOut["version"]),
-		Files:     fitBundle(files),
 		Metadata:  metaOut,
 		Notes:     notes,
 	})
@@ -302,20 +337,19 @@ func FetchCrates(name, version string) *types.ArtifactBundle {
 		}
 	}
 	metaOut := map[string]any{
-		"version":            chosen,
-		"description":        crateInfo["description"],
-		"homepage":           crateInfo["homepage"],
-		"repository":         crateInfo["repository"],
-		"documentation":      crateInfo["documentation"],
-		"downloads":          crateInfo["downloads"],
-		"created_at":         crateInfo["created_at"],
-		"has_build_script":   hasBuild,
+		"version":          chosen,
+		"description":      crateInfo["description"],
+		"homepage":         crateInfo["homepage"],
+		"repository":       crateInfo["repository"],
+		"documentation":    crateInfo["documentation"],
+		"downloads":        crateInfo["downloads"],
+		"created_at":       crateInfo["created_at"],
+		"has_build_script": hasBuild,
 	}
-	return finalize(&types.ArtifactBundle{
+	return finalizeFrom(files, &types.ArtifactBundle{
 		Ecosystem: "crates.io",
 		Name:      name,
 		Version:   chosen,
-		Files:     fitBundle(files),
 		Metadata:  metaOut,
 		Notes:     notes,
 	})
@@ -391,11 +425,10 @@ func FetchRubyGems(name, version string) *types.ArtifactBundle {
 		"downloads":            meta["downloads"],
 		"has_native_extension": hasNative,
 	}
-	return finalize(&types.ArtifactBundle{
+	return finalizeFrom(files, &types.ArtifactBundle{
 		Ecosystem: "RubyGems",
 		Name:      name,
 		Version:   chosen,
-		Files:     fitBundle(files),
 		Metadata:  metaOut,
 		Notes:     notes,
 	})
@@ -508,11 +541,10 @@ func FetchPackagist(name, version string) *types.ArtifactBundle {
 		"require":             chosen["require"],
 		"has_install_scripts": hasInstallScripts,
 	}
-	return finalize(&types.ArtifactBundle{
+	return finalizeFrom(files, &types.ArtifactBundle{
 		Ecosystem: "Packagist",
 		Name:      name,
 		Version:   chosenVersion,
-		Files:     fitBundle(files),
 		Metadata:  metaOut,
 		Notes:     notes,
 	})
@@ -524,12 +556,22 @@ func readTarGzMembers(raw []byte, stripPackagePrefix bool,
 	predicate func(name string, parts []string) bool,
 	keyFn func(name string, parts []string) string,
 ) (map[string]string, []string, error) {
+	return readTarGzMembersLimit(raw, stripPackagePrefix, predicate, keyFn, MaxFileBytes*2)
+}
+
+// readTarGzMembersLimit is readTarGzMembers with an explicit per-member
+// read cap, for manifests that must be parsed whole.
+func readTarGzMembersLimit(raw []byte, stripPackagePrefix bool,
+	predicate func(name string, parts []string) bool,
+	keyFn func(name string, parts []string) string,
+	limit int64,
+) (map[string]string, []string, error) {
 	gz, err := gzip.NewReader(bytes.NewReader(raw))
 	if err != nil {
 		return nil, nil, err
 	}
 	defer gz.Close()
-	return walkTar(gz, stripPackagePrefix, predicate, keyFn)
+	return walkTarLimit(gz, stripPackagePrefix, predicate, keyFn, limit)
 }
 
 func readTarAnyMembers(raw []byte, stripPackagePrefix bool,

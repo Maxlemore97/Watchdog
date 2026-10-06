@@ -72,11 +72,10 @@ func FetchNuGet(name, version string) *types.ArtifactBundle {
 		"id":      id,
 		"version": chosen,
 	}
-	return finalize(&types.ArtifactBundle{
+	return finalizeFrom(files, &types.ArtifactBundle{
 		Ecosystem: "NuGet",
 		Name:      name,
 		Version:   chosen,
-		Files:     fitBundle(files),
 		Metadata:  metaOut,
 		Notes:     notes,
 	})

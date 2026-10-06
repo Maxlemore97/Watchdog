@@ -159,6 +159,25 @@ func Prefilter(b *types.ArtifactBundle) map[string]any {
 	}
 }
 
+// requireCompleteReview downgrades `allow` to `ask` when the size caps
+// cut an executable surface: the verdict covers only what the LLM saw,
+// and the hidden remainder is exactly where a payload would sit. Runs
+// on every return path (cache hits included), so a cached `allow`
+// cannot bypass it. deny/ask pass through unchanged.
+func requireCompleteReview(b *types.ArtifactBundle, v map[string]any) map[string]any {
+	if b == nil || len(b.TruncatedExecutable) == 0 || verdictOf(v) != "allow" {
+		return v
+	}
+	out := make(map[string]any, len(v)+1)
+	for k, val := range v {
+		out[k] = val
+	}
+	out["verdict"] = "ask"
+	out["reason"] = "executable content exceeded review size caps and was only partially analyzed: " +
+		strings.Join(truncIndicators(b.TruncatedExecutable, 5), ", ")
+	return out
+}
+
 func sortedKeys(m map[string]string) []string {
 	out := make([]string, 0, len(m))
 	for k := range m {
@@ -487,11 +506,13 @@ func verdictOf(m map[string]any) string {
 func AnalyzePackage(ecosystem, name, version string) (result map[string]any) {
 	start := time.Now()
 	evt := completedEvent{ecosystem: ecosystem, name: name, version: version}
+	var bundle *types.ArtifactBundle
 	defer func() {
+		result = requireCompleteReview(bundle, result)
 		emitAnalyzerCompleted(evt, verdictOf(result), time.Since(start))
 	}()
 
-	bundle := fetchers.Fetch(ecosystem, name, version)
+	bundle = fetchers.Fetch(ecosystem, name, version)
 	if bundle == nil {
 		evt.route = "unfetchable"
 		return map[string]any{
@@ -560,11 +581,13 @@ func AnalyzePackage(ecosystem, name, version string) (result map[string]any) {
 func AnalyzeLocalPlugin(name, dir, contentHash string) (result map[string]any) {
 	start := time.Now()
 	evt := completedEvent{ecosystem: "plugin-local", name: name, version: contentHash}
+	var bundle *types.ArtifactBundle
 	defer func() {
+		result = requireCompleteReview(bundle, result)
 		emitAnalyzerCompleted(evt, verdictOf(result), time.Since(start))
 	}()
 
-	bundle := fetchers.FetchPluginLocal(name, dir)
+	bundle = fetchers.FetchPluginLocal(name, dir)
 	if bundle == nil {
 		evt.route = "unfetchable"
 		return map[string]any{

@@ -149,7 +149,10 @@ help reaches the model:
   call matching `UNSET_PATH`, `PATH_OVERRIDE`, `ABS_PATH_INSTALL`,
   `SETTINGS_JSON_EDIT` (writes to any host's hook / MCP config —
   `~/.claude/settings.json`, `~/.cursor/mcp.json`, the Continue /
-  Cline / Zed equivalents), `WATCHDOG_KILL`, or `WATCHDOG_REMOVE`;
+  Cline / Zed equivalents), `WATCHDOG_KILL`, `WATCHDOG_REMOVE`, or
+  `WATCHDOG_ENV_OVERRIDE` (an agent-issued `WATCHDOG_*=…` assignment,
+  e.g. `WATCHDOG_DISABLE=1 npm i x` — Watchdog configuration belongs in
+  the user's shell profile, never in an agent command);
   an always-on JSON-lines audit log at `~/.watchdog/audit.jsonl`
   recording every protective and meta-protective event.
 
