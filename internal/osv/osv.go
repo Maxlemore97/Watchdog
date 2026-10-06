@@ -243,9 +243,13 @@ func scoreToRank(score float64) int {
 }
 
 // SeverityRankOf inspects a vulnerability record and returns its
-// severity rank. Records carrying database_specific.severity win;
-// otherwise the highest CVSS score wins; otherwise unknown (high).
+// severity rank. Malicious-package advisories are always critical.
+// Otherwise records carrying database_specific.severity win; otherwise
+// the highest scorable CVSS entry wins; otherwise unknown (high).
 func SeverityRankOf(vuln map[string]any) int {
+	if IsMalicious(vuln) {
+		return SeverityRank["critical"]
+	}
 	if dbs, ok := vuln["database_specific"].(map[string]any); ok {
 		if label, ok := dbs["severity"].(string); ok {
 			lower := strings.ToLower(strings.TrimSpace(label))
@@ -265,8 +269,8 @@ func SeverityRankOf(vuln map[string]any) int {
 			if !ok || scoreStr == "" {
 				continue
 			}
-			score, err := strconv.ParseFloat(scoreStr, 64)
-			if err != nil {
+			score, ok := cvssScore(scoreStr)
+			if !ok {
 				continue
 			}
 			r := scoreToRank(score)
@@ -297,7 +301,8 @@ func FilterBySeverity(vulns []map[string]any) []map[string]any {
 	threshold := MinSeverityRank()
 	out := make([]map[string]any, 0, len(vulns))
 	for _, v := range vulns {
-		if SeverityRankOf(v) >= threshold {
+		// Malicious packages are never filtered out by the floor.
+		if IsMalicious(v) || SeverityRankOf(v) >= threshold {
 			out = append(out, v)
 		}
 	}
@@ -305,9 +310,21 @@ func FilterBySeverity(vulns []map[string]any) []map[string]any {
 }
 
 // Summarize renders up to five vulnerabilities as "ID[severity], ...".
+// Malicious-package advisories are listed first and labelled as such.
 func Summarize(vulns []map[string]any) string {
+	ordered := make([]map[string]any, 0, len(vulns))
+	for _, v := range vulns {
+		if IsMalicious(v) {
+			ordered = append(ordered, v)
+		}
+	}
+	for _, v := range vulns {
+		if !IsMalicious(v) {
+			ordered = append(ordered, v)
+		}
+	}
 	parts := []string{}
-	for i, v := range vulns {
+	for i, v := range ordered {
 		if i >= 5 {
 			parts = append(parts, "...")
 			break
@@ -316,7 +333,11 @@ func Summarize(vulns []map[string]any) string {
 		if id == "" {
 			id = "?"
 		}
-		parts = append(parts, fmt.Sprintf("%s[%s]", id, SeverityLabel(SeverityRankOf(v))))
+		label := SeverityLabel(SeverityRankOf(v))
+		if IsMalicious(v) {
+			label = "MALICIOUS PACKAGE"
+		}
+		parts = append(parts, fmt.Sprintf("%s[%s]", id, label))
 	}
 	return strings.Join(parts, ", ")
 }
