@@ -118,7 +118,7 @@ func Write(command, verdict, reason string) {
 	default:
 		return
 	}
-	if err := os.MkdirAll(Dir(), 0o755); err != nil {
+	if err := os.MkdirAll(Dir(), 0o700); err != nil {
 		audit.Record("decision.write_failed", map[string]any{
 			"reason": "mkdir: " + err.Error(),
 		})
@@ -151,7 +151,7 @@ func Write(command, verdict, reason string) {
 	key := Key(command)
 	path := tokenPath(key)
 	tmp := path + "." + strconv.Itoa(os.Getpid()) + ".tmp"
-	if err := os.WriteFile(tmp, data, 0o644); err != nil {
+	if err := os.WriteFile(tmp, data, 0o600); err != nil {
 		audit.Record("decision.write_failed", map[string]any{
 			"reason": "write: " + err.Error(),
 		})

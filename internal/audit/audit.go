@@ -24,7 +24,7 @@ func Record(event string, fields map[string]any) {
 	if path == "" {
 		path = paths.AuditLogPath()
 	}
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return
 	}
 	record := map[string]any{
@@ -39,10 +39,13 @@ func Record(event string, fields map[string]any) {
 	if err != nil {
 		return
 	}
-	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
 	if err != nil {
 		return
 	}
 	defer f.Close()
+	// Tighten logs created by older versions (0644): entries can carry
+	// commands with credentials in URLs.
+	_ = f.Chmod(0o600)
 	_, _ = f.Write(append(data, '\n'))
 }

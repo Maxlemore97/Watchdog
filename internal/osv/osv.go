@@ -111,7 +111,7 @@ func CacheLoad(pkg types.Package) []map[string]any {
 // CacheStore atomically writes the vulnerability list to disk.
 func CacheStore(pkg types.Package, vulns []map[string]any) {
 	dir := paths.CacheDir()
-	if err := os.MkdirAll(dir, 0o755); err != nil {
+	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return
 	}
 	data, err := json.Marshal(vulns)
@@ -122,7 +122,7 @@ func CacheStore(pkg types.Package, vulns []map[string]any) {
 	// PID-suffixed tmp so parallel processes can't tear each other's
 	// cache writes via a shared staging filename.
 	tmp := path + "." + strconv.Itoa(os.Getpid()) + ".tmp"
-	if err := os.WriteFile(tmp, data, 0o644); err != nil {
+	if err := os.WriteFile(tmp, data, 0o600); err != nil {
 		log.Event("cache_write_failed", map[string]any{"path": path, "stage": "write_tmp", "error": err.Error()})
 		return
 	}

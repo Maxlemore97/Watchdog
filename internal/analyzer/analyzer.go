@@ -264,7 +264,7 @@ func cacheStore(key string, verdict map[string]any) {
 		return
 	}
 	dir := paths.CacheDir()
-	if err := os.MkdirAll(dir, 0o755); err != nil {
+	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return
 	}
 	data, err := json.Marshal(verdict)
@@ -277,7 +277,7 @@ func cacheStore(key string, verdict map[string]any) {
 	// staging file. Each PID owns its own tmp; Rename of the loser
 	// may still ENOENT but the cache content cannot be torn.
 	tmp := path + "." + strconv.Itoa(os.Getpid()) + ".tmp"
-	if err := os.WriteFile(tmp, data, 0o644); err != nil {
+	if err := os.WriteFile(tmp, data, 0o600); err != nil {
 		log.Event("cache_write_failed", map[string]any{"path": path, "stage": "write_tmp", "error": err.Error()})
 		return
 	}

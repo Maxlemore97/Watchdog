@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sync"
 	"testing"
 )
@@ -105,4 +106,26 @@ func TestRecord_NoCrashOnUnwritablePath(t *testing.T) {
 	t.Setenv("WATCHDOG_AUDIT_LOG", "/this/path/cannot/exist/audit.jsonl")
 	// Must not panic or block. Caller (hook) keeps running.
 	Record("noop", nil)
+}
+
+// Audit entries can carry commands with credentials in registry URLs,
+// so the log must be owner-only — including logs created 0644 by
+// older versions.
+func TestRecord_LogIsOwnerOnly(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("unix permissions")
+	}
+	path := filepath.Join(t.TempDir(), "audit.jsonl")
+	if err := os.WriteFile(path, nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("WATCHDOG_AUDIT_LOG", path)
+	Record("test.event", map[string]any{"k": "v"})
+	st, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if st.Mode().Perm() != 0o600 {
+		t.Errorf("audit log mode %v, want 0600", st.Mode().Perm())
+	}
 }
