@@ -193,3 +193,73 @@ func registryEnvNotes(envs []string) []string {
 	}
 	return notes
 }
+
+// heredocRE matches a here-document operator (`<<EOF`, `<<-'EOF'`,
+// `<< "EOF"`) but not a here-string (`<<<`).
+var heredocRE = regexp.MustCompile(`(?:^|[^<])<<(-?)[ \t]*(['"]?)([A-Za-z_][A-Za-z0-9_]*)(['"]?)`)
+
+// splitHeredocs removes here-document bodies from cmd and returns the
+// remaining command text plus the bodies that will execute as shell
+// code. A body is shell code when the line feeding it runs a shell
+// (`bash <<EOF`, `cat <<EOF | sh`, `eval`/`source`); otherwise it is
+// data (`python3 - <<EOF`, `cat > f <<EOF`) and only its command
+// substitutions run — and only when the delimiter is unquoted.
+func splitHeredocs(cmd string) (string, []string) {
+	if !strings.Contains(cmd, "<<") {
+		return cmd, nil
+	}
+	lines := strings.Split(cmd, "\n")
+	var outer, bodies []string
+	for i := 0; i < len(lines); i++ {
+		line := lines[i]
+		outer = append(outer, line)
+		ms := heredocRE.FindAllStringSubmatch(line, -1)
+		if len(ms) == 0 {
+			continue
+		}
+		feedsShell := lineFeedsShell(line)
+		for _, m := range ms {
+			stripTabs, quoted, delim := m[1] == "-", m[2] != "", m[3]
+			var body []string
+			for i+1 < len(lines) {
+				i++
+				l := lines[i]
+				if stripTabs {
+					l = strings.TrimLeft(l, "\t")
+				}
+				if l == delim {
+					break
+				}
+				body = append(body, lines[i])
+			}
+			text := strings.Join(body, "\n")
+			switch {
+			case feedsShell:
+				bodies = append(bodies, text)
+			case !quoted:
+				bodies = append(bodies, ExtractSubstitutions(text)...)
+			}
+		}
+	}
+	return strings.Join(outer, "\n"), bodies
+}
+
+// lineFeedsShell reports whether any command on a heredoc line is a
+// shell interpreter reading stdin, or eval/source.
+func lineFeedsShell(line string) bool {
+	for _, seg := range SplitOnOperators(line) {
+		toks, err := Tokenize(seg)
+		if err != nil {
+			return true // cannot tell — treat as code
+		}
+		st := stripCommandPrefixes(toks)
+		if len(st.tokens) == 0 {
+			continue
+		}
+		head := normalizeBinary(st.tokens[0])
+		if shellBinaries[head] || head == "eval" || head == "source" || head == "." {
+			return true
+		}
+	}
+	return false
+}

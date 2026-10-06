@@ -96,6 +96,15 @@ func DefaultShimDir() string {
 	return filepath.Join(home, ".watchdog", "bin")
 }
 
+// ResolveShimDir returns the active shim dir: WATCHDOG_SHIM_DIR when
+// set, DefaultShimDir otherwise.
+func ResolveShimDir() string {
+	if v := os.Getenv("WATCHDOG_SHIM_DIR"); v != "" {
+		return v
+	}
+	return DefaultShimDir()
+}
+
 // PosixWrapperTemplate writes a tiny shell script that exec's the
 // watchdog-shim-exec binary with the tool name as first arg.
 const PosixWrapperTemplate = `#!/usr/bin/env bash

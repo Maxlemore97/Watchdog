@@ -768,6 +768,12 @@ func CollectPackages(command string, resolveFn ResolveVersionFn) ([]types.Packag
 		if depth > 3 {
 			return
 		}
+		// Here-document bodies are data unless a shell reads them;
+		// shell-fed bodies are walked as nested scripts.
+		cmd, bodies := splitHeredocs(cmd)
+		for _, b := range bodies {
+			walk(b, depth+1)
+		}
 		for _, inner := range ExtractSubshells(cmd) {
 			walk(inner, depth+1)
 		}

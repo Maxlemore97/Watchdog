@@ -49,12 +49,7 @@ func failClosedVerdict() string {
 	return "deny"
 }
 
-func shimDir() string {
-	if v := os.Getenv("WATCHDOG_SHIM_DIR"); v != "" {
-		return v
-	}
-	return shim.DefaultShimDir()
-}
+func shimDir() string { return shim.ResolveShimDir() }
 
 // execReal replaces this process with the real binary. Implemented in
 // exec_unix.go (syscall.Exec for true argv[0] semantics) and
